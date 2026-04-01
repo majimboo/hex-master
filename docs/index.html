@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Hex Master</title>
+    <meta name="description" content="Hex Master is a Windows-first hex editor built with a Rust core and a Qt desktop shell.">
+    <link rel="stylesheet" href="site.css">
+</head>
+<body>
+    <main class="shell">
+        <section class="hero">
+            <p class="eyebrow">Windows-First Hex Editor</p>
+            <h1>Hex Master</h1>
+            <p class="subhead">
+                A keyboard-friendly desktop hex editor with structural editing, typed inspection,
+                byte-pattern search, and a Rust core behind a Qt shell.
+            </p>
+            <div class="actions">
+                <a class="button primary" id="download-link" href="#">Download Latest</a>
+                <a class="button" id="release-link" href="#">Releases</a>
+                <a class="button" id="repo-link" href="#">Repository</a>
+            </div>
+        </section>
+
+        <section class="grid">
+            <article class="card">
+                <h2>Current Feature Set</h2>
+                <ul>
+                    <li>Hex and text-side editing with insert and overwrite modes</li>
+                    <li>Find next, find all, typed-value search, and structured replace</li>
+                    <li>Inspector dock with grouped numeric and time interpretations</li>
+                    <li>Bookmarks, hashes, session restore, and recent files</li>
+                </ul>
+            </article>
+            <article class="card">
+                <h2>Release Model</h2>
+                <ul>
+                    <li>Semantic versioning from a single CMake version source</li>
+                    <li>GitHub Actions CI for Windows build and Rust tests</li>
+                    <li>Tagged releases publish downloadable Windows archives</li>
+                    <li>GitHub Pages provides a lightweight public landing page</li>
+                </ul>
+            </article>
+            <article class="card">
+                <h2>Created By</h2>
+                <ul>
+                    <li>Majid Siddiqui</li>
+                    <li><a href="mailto:me@majidarif.com">me@majidarif.com</a></li>
+                    <li>2026</li>
+                </ul>
+            </article>
+        </section>
+
+        <p class="footer">
+            For build notes, roadmap, and technical documentation, browse the repository documents and release notes.
+        </p>
+    </main>
+
+    <script>
+        (function () {
+            const host = window.location.hostname;
+            const parts = window.location.pathname.split("/").filter(Boolean);
+            let owner = "";
+            let repo = "";
+
+            if (host.endsWith(".github.io")) {
+                owner = host.split(".")[0];
+                repo = parts.length > 0 ? parts[0] : owner + ".github.io";
+            }
+
+            if (!owner || !repo) {
+                document.getElementById("download-link").href = "#";
+                document.getElementById("release-link").href = "#";
+                document.getElementById("repo-link").href = "#";
+                return;
+            }
+
+            const base = `https://github.com/${owner}/${repo}`;
+            document.getElementById("download-link").href = `${base}/releases/latest`;
+            document.getElementById("release-link").href = `${base}/releases`;
+            document.getElementById("repo-link").href = base;
+        }());
+    </script>
+</body>
+</html>

@@ -1,95 +1,181 @@
 # Hex Master
 
-`Hex Master` is a Windows-first, cross-platform hex editor built around a `Rust` core and a `Qt` desktop shell.
+Hex Master is a Windows-first hex editor built with a Rust core and a Qt desktop shell.
 
-The design target is straightforward:
+The current app is focused on practical desktop workflows:
 
-- open very large files quickly
-- keep memory usage bounded
-- support safe editing without loading the whole file into RAM
-- preserve dense, keyboard-first desktop workflows
+- structural editing with insert and overwrite modes
+- hex-side and text-side editing
+- typed inspector views for integer, floating-point, and time interpretations
+- byte-pattern, text, and typed-value search
+- replace next and replace all from a unified replace workflow
+- bookmarks, checksums, recent files, and session restore
 
-## Repository Layout
+## Status
 
-- `crates/hexapp-core`: document model, offsets, selections, edit operations
-- `crates/hexapp-io`: file-backed sources, save strategy, large-file I/O primitives
-- `crates/hexapp-search`: background search and replace services
-- `crates/hexapp-analysis`: hashes and analysis jobs
-- `crates/hexapp-inspector`: typed value decoding for the data inspector
-- `crates/hexapp-session`: settings and session persistence models
-- `crates/hexapp-ffi`: narrow bridge surface between the Rust core and Qt shell
-- `ui/qt`: Rust-side desktop bootstrap binary
-- `ui/qt-shell`: CMake/Qt desktop shell skeleton
-- `docs/`: product and engineering specifications
+This repository now contains a functional desktop application rather than only a scaffold. The current release line starts at `1.0.0`, and versioning follows semantic versioning.
 
-## Current Status
+## Downloads
 
-This repository is scaffolded for `Milestone 0`.
+Once GitHub Releases is enabled for the repository, the latest downloadable build will be available from:
 
-Implemented in the scaffold:
+- `https://github.com/<owner>/<repo>/releases/latest`
 
-- workspace and crate boundaries
-- baseline specs and roadmap
-- core domain types for offsets, ranges, selections, bookmarks, and document summaries
-- initial file source and search/analysis/inspector/session models
-- narrow FFI-facing app state
-- Qt shell skeleton with `QMainWindow`, menu bar, status bar, and dock placeholders
+The GitHub Pages landing site is designed to point at that latest release automatically.
 
-Not implemented yet:
+Release asset naming:
 
-- custom hex viewport
-- piece table editing model
-- save pipeline
-- large-file page cache
-- background search engine
+- Windows executable inside the package: `HexMaster.exe`
+- Windows release archive: `HexMaster-windows-x64-vX.Y.Z.zip`
 
-## Build Notes
+## Build
 
-### Single Build Command
+Prerequisites:
+
+- Rust toolchain
+- CMake 3.27+
+- Qt 6 for MSVC on Windows
+- Visual Studio 2022 build tools or full IDE
+
+### Platform Support
+
+- Windows: primary supported release target
+- Linux: source build may be possible with Qt 6 and a native toolchain, but release automation is not set up yet
+- macOS: source build may be possible later, but release automation is not set up yet
+
+The current public release pipeline is intentionally Windows-first until packaging and runtime validation are in place on other platforms.
+
+Debug build:
 
 ```powershell
 .\scripts\build.ps1
 ```
 
-This command:
+Release build:
 
-- builds the Rust workspace
-- runs the Rust test suite
-- configures and builds the Qt shell if `Qt 6` is installed and `qtpaths` is on `PATH`
+```powershell
+.\scripts\build.ps1 -Configuration Release
+```
 
-If Qt is not installed yet, you can still build the Rust side with:
+Rust-only build:
 
 ```powershell
 .\scripts\build.ps1 -SkipQt
 ```
 
-### Rust
+## Versioning
 
-```powershell
-cargo check
-```
+Version is defined in one place:
 
-### Qt Shell
+- [ui/qt-shell/CMakeLists.txt](ui/qt-shell/CMakeLists.txt)
 
-The Qt shell currently lives in `ui/qt-shell` as a CMake project skeleton. It is intentionally decoupled from the Rust build until the FFI boundary is finalized.
+That version feeds:
 
-Expected local prerequisites:
+- Qt application metadata
+- the About dialog
+- Windows executable version information
 
-- `Qt 6`
-- `CMake 3.27+`
-- a C++20-capable compiler
+Version bump rules:
 
-### Bootstrap Script
+- `MAJOR`: breaking changes
+- `MINOR`: backward-compatible features
+- `PATCH`: backward-compatible fixes and polish
 
-```powershell
-.\scripts\bootstrap.ps1
-```
+Example progression:
 
-This script checks for the baseline local toolchain used by the scaffold.
+- `1.0.0`
+- `1.1.0`
+- `1.1.1`
+- `2.0.0`
 
-## Docs
+## Release Flow
 
-- `docs/PRODUCT_SPEC.md`
-- `docs/ARCHITECTURE.md`
-- `docs/ROADMAP.md`
-- `docs/MVP_CHECKLIST.md`
+Recommended release process:
+
+1. bump the version in `ui/qt-shell/CMakeLists.txt`
+2. commit the version change
+3. create and push a matching tag like `v1.0.1`
+4. GitHub Actions builds and publishes the release archive
+
+The shipped executable name remains stable across releases:
+
+- `HexMaster.exe`
+
+The version belongs in:
+
+- the Git tag, for example `v1.0.1`
+- the release archive name, for example `HexMaster-windows-x64-v1.0.1.zip`
+- application metadata and About dialog
+
+Avoid putting the version directly in the executable filename for the normal release package. A stable executable name is cleaner for shortcuts, PATH usage, and end-user installs.
+
+Tagged releases are handled by:
+
+- [.github/workflows/release.yml](.github/workflows/release.yml)
+
+## GitHub Automation
+
+This repository includes:
+
+- CI workflow for Rust tests and Windows Qt build
+- release workflow for tagged Windows artifacts
+- Pages deployment workflow for the public landing page
+
+Workflow files:
+
+- [.github/workflows/ci.yml](.github/workflows/ci.yml)
+- [.github/workflows/release.yml](.github/workflows/release.yml)
+- [.github/workflows/pages.yml](.github/workflows/pages.yml)
+
+## GitHub Pages
+
+The public landing page is served from:
+
+- [docs/index.html](docs/index.html)
+
+Pages content is deployed from the `docs/` directory using GitHub Actions.
+
+## Repository Layout
+
+- `crates/hexapp-core`: core document and selection logic
+- `crates/hexapp-io`: file-backed I/O support
+- `crates/hexapp-search`: search-related logic
+- `crates/hexapp-analysis`: hashes and analysis helpers
+- `crates/hexapp-inspector`: typed data interpretation
+- `crates/hexapp-session`: settings and session persistence
+- `crates/hexapp-ffi`: Rust bridge consumed by the Qt shell
+- `ui/qt-shell`: main Qt desktop application
+- `ui/qt`: Rust-side bootstrap crate
+- `docs/`: product, architecture, roadmap, and Pages site
+- `scripts/`: local bootstrap and build scripts
+
+## Public Repo Checklist
+
+For a professional public repository, the expected baseline is:
+
+- clean root `.gitignore`
+- single-source versioning
+- license file
+- CI on push and pull request
+- release automation on tags
+- GitHub Pages landing page
+- clear build and release instructions
+
+## Documentation
+
+- [docs/PRODUCT_SPEC.md](docs/PRODUCT_SPEC.md)
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- [docs/ROADMAP.md](docs/ROADMAP.md)
+- [docs/MVP_CHECKLIST.md](docs/MVP_CHECKLIST.md)
+- [docs/BUILD.md](docs/BUILD.md)
+- [docs/RELEASE.md](docs/RELEASE.md)
+
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE).
+
+## Author
+
+Created by Majid Siddiqui  
+me@majidarif.com  
+2026

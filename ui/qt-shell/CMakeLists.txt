@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.27)
-project(hex_master_qt_shell LANGUAGES CXX)
+project(hex_master_qt_shell VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -11,11 +11,17 @@ find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
 
 qt_standard_project_setup()
 
-set(HEX_MASTER_RUST_LIB "${CMAKE_SOURCE_DIR}/../../target/debug/hexapp_ffi.dll.lib")
-set(HEX_MASTER_RUST_DLL "${CMAKE_SOURCE_DIR}/../../target/debug/hexapp_ffi.dll")
+set(HEX_MASTER_RUST_PROFILE "$<IF:$<CONFIG:Debug>,debug,release>")
+set(HEX_MASTER_RUST_LIB "${CMAKE_SOURCE_DIR}/../../target/${HEX_MASTER_RUST_PROFILE}/hexapp_ffi.dll.lib")
+set(HEX_MASTER_RUST_DLL "${CMAKE_SOURCE_DIR}/../../target/${HEX_MASTER_RUST_PROFILE}/hexapp_ffi.dll")
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/app_version.rc.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/app_version.rc"
+    @ONLY
+)
 
 qt_add_executable(hex_master_qt_shell WIN32
-    resources/app_icon.rc
+    "${CMAKE_CURRENT_BINARY_DIR}/app_version.rc"
     resources/app_resources.qrc
     src/file_byte_source.cpp
     src/hex_view.cpp
@@ -28,7 +34,9 @@ qt_add_executable(hex_master_qt_shell WIN32
 )
 
 target_include_directories(hex_master_qt_shell PRIVATE include)
+target_compile_definitions(hex_master_qt_shell PRIVATE HEX_MASTER_VERSION="${PROJECT_VERSION}")
 target_link_libraries(hex_master_qt_shell PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets "${HEX_MASTER_RUST_LIB}")
+set_target_properties(hex_master_qt_shell PROPERTIES OUTPUT_NAME "HexMaster")
 
 add_custom_command(TARGET hex_master_qt_shell POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different

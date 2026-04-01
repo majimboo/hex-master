@@ -14,9 +14,13 @@ Desktop.ini
 
 # Local verification scratch
 /verify/
+/release/
+/artifacts/
 
 # Build outputs
 /build/
+/dist/
+/out/
 *.log
 *.tmp
 *.bak
@@ -50,6 +54,16 @@ Makefile
 *.exe
 *.lib
 *.exp
+
+# Python and automation caches
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
 
 # Project-specific local logs
 aqtinstall.log

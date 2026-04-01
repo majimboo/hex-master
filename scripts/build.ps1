@@ -1,6 +1,8 @@
 param(
     [switch]$SkipTests,
-    [switch]$SkipQt
+    [switch]$SkipQt,
+    [ValidateSet("Debug", "Release")]
+    [string]$Configuration = "Debug"
 )
 
 $ErrorActionPreference = "Stop"
@@ -62,13 +64,17 @@ function Resolve-QtPrefix {
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $qtShellSource = Join-Path $repoRoot "ui\\qt-shell"
-$qtBuildDir = Join-Path $repoRoot "build\\qt-shell"
+$qtBuildDir = Join-Path $repoRoot "build\\qt-shell-complete"
 
 Require-Command "cargo" | Out-Null
 Require-Command "cmake" | Out-Null
 
 Write-Host "[1/3] Building Rust workspace"
-Invoke-Step "cargo build --workspace" { cargo build --workspace }
+if ($Configuration -eq "Release") {
+    Invoke-Step "cargo build --workspace --release" { cargo build --workspace --release }
+} else {
+    Invoke-Step "cargo build --workspace" { cargo build --workspace }
+}
 
 if (-not $SkipTests) {
     Write-Host "[2/3] Running Rust tests"
@@ -96,4 +102,4 @@ Invoke-Step "cmake configure" {
 }
 
 Write-Host "[4/4] Building Qt shell"
-Invoke-Step "cmake build" { cmake --build $qtBuildDir --config Debug }
+Invoke-Step "cmake build" { cmake --build $qtBuildDir --config $Configuration }

@@ -1,0 +1,68 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: 6.8.2
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          cache: true
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build Rust release artifacts
+        shell: pwsh
+        run: cargo build --workspace --release
+
+      - name: Configure Qt shell
+        shell: pwsh
+        run: cmake -S ui/qt-shell -B build/qt-shell-complete -G "Visual Studio 17 2022" -A x64
+
+      - name: Build Qt shell release
+        shell: pwsh
+        run: cmake --build build/qt-shell-complete --config Release
+
+      - name: Deploy Qt runtime
+        shell: pwsh
+        run: |
+          $exe = Resolve-Path "build/qt-shell-complete/Release/HexMaster.exe"
+          windeployqt --release --compiler-runtime $exe
+
+      - name: Package release archive
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $archive = "HexMaster-windows-x64-$tag.zip"
+          if (Test-Path "dist") { Remove-Item "dist" -Recurse -Force }
+          New-Item -ItemType Directory -Path "dist" | Out-Null
+          Compress-Archive -Path "build/qt-shell-complete/Release/*" -DestinationPath "dist/$archive"
+
+      - name: Publish GitHub release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $archive = "dist/HexMaster-windows-x64-$tag.zip"
+          gh release create $tag $archive --verify-tag --generate-notes --title "Hex Master $tag"

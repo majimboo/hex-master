@@ -7,10 +7,14 @@
 
 #include "main_window.hpp"
 
+#ifndef HEX_MASTER_VERSION
+#define HEX_MASTER_VERSION "1.0.0"
+#endif
+
 int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
     app.setApplicationName("Hex Master");
-    app.setApplicationVersion("1.0.0");
+    app.setApplicationVersion(QStringLiteral(HEX_MASTER_VERSION));
     app.setOrganizationName("Hex Master");
     app.setWindowIcon(QIcon(QStringLiteral(":/appicon.png")));
     app.setStyle(QStyleFactory::create("Fusion"));

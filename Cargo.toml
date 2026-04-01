@@ -14,8 +14,7 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 license = "MIT"
-authors = ["hex_master contributors"]
-repository = "https://example.invalid/hex_master"
+authors = ["Majid Siddiqui <me@majidarif.com>"]
 
 [workspace.dependencies]
 anyhow = "1.0"

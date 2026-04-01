@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  pull_request:
+
+jobs:
+  windows-build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: 6.8.2
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          cache: true
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Run Rust tests
+        shell: pwsh
+        run: cargo test --workspace
+
+      - name: Configure Qt shell
+        shell: pwsh
+        run: cmake -S ui/qt-shell -B build/qt-shell-complete -G "Visual Studio 17 2022" -A x64
+
+      - name: Build Qt shell
+        shell: pwsh
+        run: cmake --build build/qt-shell-complete --config Debug
