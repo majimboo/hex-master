@@ -17,6 +17,12 @@ struct EditRecord {
     after: Vec<u8>,
 }
 
+#[derive(Clone)]
+enum Piece {
+    Original { start: u64, len: u64 },
+    Added(Vec<u8>),
+}
+
 #[derive(Debug, Default)]
 pub struct AppState {
     documents: Vec<Document>,
@@ -70,7 +76,7 @@ pub struct FileDocumentHandle {
     #[allow(dead_code)]
     path: PathBuf,
     source: FileByteSource,
-    materialized: Option<Vec<u8>>,
+    pieces: Option<Vec<Piece>>,
     overwrites: BTreeMap<u64, u8>,
     undo_stack: Vec<EditRecord>,
     redo_stack: Vec<EditRecord>,
@@ -89,10 +95,6 @@ fn path_from_c(path: *const c_char) -> Option<PathBuf> {
 }
 
 fn original_byte(document: &FileDocumentHandle, offset: u64) -> Option<u8> {
-    if let Some(materialized) = &document.materialized {
-        return materialized.get(offset as usize).copied();
-    }
-
     let bytes = document
         .source
         .read_range(hexapp_core::ByteRange {
@@ -103,9 +105,137 @@ fn original_byte(document: &FileDocumentHandle, offset: u64) -> Option<u8> {
     bytes.first().copied()
 }
 
+fn piece_len(piece: &Piece) -> u64 {
+    match piece {
+        Piece::Original { len, .. } => *len,
+        Piece::Added(bytes) => bytes.len() as u64,
+    }
+}
+
+fn total_piece_len(pieces: &[Piece]) -> u64 {
+    pieces.iter().map(piece_len).sum()
+}
+
+fn slice_piece(piece: &Piece, start: u64, len: u64) -> Piece {
+    match piece {
+        Piece::Original { start: piece_start, .. } => Piece::Original {
+            start: piece_start + start,
+            len,
+        },
+        Piece::Added(bytes) => {
+            let range_start = start as usize;
+            let range_end = (start + len) as usize;
+            Piece::Added(bytes[range_start..range_end].to_vec())
+        }
+    }
+}
+
+fn coalesce_pieces(pieces: &mut Vec<Piece>) {
+    let mut merged: Vec<Piece> = Vec::with_capacity(pieces.len());
+    for piece in pieces.drain(..) {
+        match (merged.last_mut(), piece) {
+            (
+                Some(Piece::Original {
+                    start: prev_start,
+                    len: prev_len,
+                }),
+                Piece::Original { start, len },
+            ) if *prev_start + *prev_len == start => {
+                *prev_len += len;
+            }
+            (Some(Piece::Added(prev)), Piece::Added(bytes)) => {
+                prev.extend_from_slice(&bytes);
+            }
+            (_, piece) => merged.push(piece),
+        }
+    }
+    *pieces = merged;
+}
+
+fn replace_range_in_pieces(
+    pieces: &mut Vec<Piece>,
+    offset: u64,
+    remove_len: u64,
+    replacement: &[u8],
+) -> bool {
+    let total_len = total_piece_len(pieces);
+    let remove_end = match offset.checked_add(remove_len) {
+        Some(value) => value,
+        None => return false,
+    };
+    if offset > total_len || remove_end > total_len {
+        return false;
+    }
+
+    let mut result: Vec<Piece> = Vec::new();
+    let mut cursor = 0_u64;
+    let mut inserted = false;
+
+    for piece in pieces.iter() {
+        let len = piece_len(piece);
+        let piece_start = cursor;
+        let piece_end = cursor + len;
+
+        if piece_end <= offset || piece_start >= remove_end {
+            if !inserted && piece_start >= remove_end {
+                if !replacement.is_empty() {
+                    result.push(Piece::Added(replacement.to_vec()));
+                }
+                inserted = true;
+            }
+            result.push(piece.clone());
+        } else {
+            if piece_start < offset {
+                result.push(slice_piece(piece, 0, offset - piece_start));
+            }
+            if !inserted {
+                if !replacement.is_empty() {
+                    result.push(Piece::Added(replacement.to_vec()));
+                }
+                inserted = true;
+            }
+            if piece_end > remove_end {
+                result.push(slice_piece(piece, remove_end - piece_start, piece_end - remove_end));
+            }
+        }
+
+        cursor = piece_end;
+    }
+
+    if !inserted && !replacement.is_empty() {
+        result.push(Piece::Added(replacement.to_vec()));
+    }
+
+    coalesce_pieces(&mut result);
+    *pieces = result;
+    true
+}
+
 fn current_byte(document: &FileDocumentHandle, offset: u64) -> Option<u8> {
-    if let Some(materialized) = &document.materialized {
-        return materialized.get(offset as usize).copied();
+    if let Some(pieces) = &document.pieces {
+        let mut cursor = 0_u64;
+        for piece in pieces {
+            let len = piece_len(piece);
+            let piece_end = cursor + len;
+            if offset < piece_end {
+                let piece_offset = offset - cursor;
+                return match piece {
+                    Piece::Original { start, .. } => {
+                        let bytes = document
+                            .source
+                            .read_range(hexapp_core::ByteRange {
+                                start: start + piece_offset,
+                                len: 1,
+                            })
+                            .ok()?;
+                        bytes.first().copied()
+                    }
+                    Piece::Added(bytes) => bytes.get(piece_offset as usize).copied(),
+                };
+            }
+            cursor = piece_end;
+        }
+        return None;
     }
 
     if let Some(overwritten) = document.overwrites.get(&offset) {
@@ -116,18 +246,56 @@ fn current_byte(document: &FileDocumentHandle, offset: u64) -> Option<u8> {
 }
 
 fn current_len(document: &FileDocumentHandle) -> u64 {
-    document
-        .materialized
-        .as_ref()
-        .map(|bytes| bytes.len() as u64)
-        .unwrap_or_else(|| document.source.len())
+    document.pieces.as_ref().map(|pieces| total_piece_len(pieces)).unwrap_or_else(|| document.source.len())
 }
 
 fn current_bytes(document: &FileDocumentHandle, offset: u64, len: u64) -> Option<Vec<u8>> {
-    if let Some(materialized) = &document.materialized {
-        let start = offset as usize;
-        let end = start.checked_add(len as usize)?;
-        return materialized.get(start..end).map(|slice| slice.to_vec());
+    let end = offset.checked_add(len)?;
+    if end > current_len(document) {
+        return None;
+    }
+
+    if let Some(pieces) = &document.pieces {
+        let mut result = Vec::with_capacity(len as usize);
+        let mut cursor = 0_u64;
+        for piece in pieces {
+            let piece_length = piece_len(piece);
+            let piece_start = cursor;
+            let piece_end = cursor + piece_length;
+            if piece_end <= offset {
+                cursor = piece_end;
+                continue;
+            }
+            if piece_start >= end {
+                break;
+            }
+
+            let overlap_start = offset.max(piece_start);
+            let overlap_end = end.min(piece_end);
+            let slice_start = overlap_start - piece_start;
+            let slice_len = overlap_end - overlap_start;
+
+            match piece {
+                Piece::Original { start, .. } => {
+                    let chunk = document
+                        .source
+                        .read_range(hexapp_core::ByteRange {
+                            start: start + slice_start,
+                            len: slice_len,
+                        })
+                        .ok()?;
+                    result.extend_from_slice(&chunk);
+                }
+                Piece::Added(bytes) => {
+                    let start_index = slice_start as usize;
+                    let end_index = (slice_start + slice_len) as usize;
+                    result.extend_from_slice(&bytes[start_index..end_index]);
+                }
+            }
+
+            cursor = piece_end;
+        }
+        return Some(result);
     }
 
     let mut bytes = document
@@ -144,17 +312,24 @@ fn current_bytes(document: &FileDocumentHandle, offset: u64, len: u64) -> Option
     Some(bytes)
 }
 
-fn materialize_document(document: &mut FileDocumentHandle) -> bool {
-    if document.materialized.is_some() {
+fn ensure_piece_table(document: &mut FileDocumentHandle) -> bool {
+    if document.pieces.is_some() {
         return true;
     }
 
-    let Some(bytes) = current_bytes(document, 0, document.source.len()) else {
-        return false;
-    };
-
-    document.materialized = Some(bytes);
-    document.overwrites.clear();
+    let len = document.source.len();
+    document.pieces = Some(vec![Piece::Original { start: 0, len }]);
+    if !document.overwrites.is_empty() {
+        let mut pieces = document.pieces.take().unwrap_or_default();
+        let overwrites: Vec<(u64, u8)> = document.overwrites.iter().map(|(&offset, &value)| (offset, value)).collect();
+        for (offset, value) in overwrites {
+            if !replace_range_in_pieces(&mut pieces, offset, 1, &[value]) {
+                return false;
+            }
+        }
+        document.pieces = Some(pieces);
+        document.overwrites.clear();
+    }
     true
 }
 
@@ -173,17 +348,8 @@ fn apply_byte(document: &mut FileDocumentHandle, offset: u64, value: u8) -> bool
 }
 
 fn apply_bytes(document: &mut FileDocumentHandle, offset: u64, bytes: &[u8]) -> bool {
-    if let Some(materialized) = &mut document.materialized {
-        let start = offset as usize;
-        let end = match start.checked_add(bytes.len()) {
-            Some(value) => value,
-            None => return false,
-        };
-        let Some(target) = materialized.get_mut(start..end) else {
-            return false;
-        };
-        target.copy_from_slice(bytes);
-        return true;
+    if document.pieces.is_some() {
+        return replace_range(document, offset, bytes.len() as u64, bytes);
     }
 
     let Some(original_bytes) = document
@@ -211,22 +377,12 @@ fn apply_bytes(document: &mut FileDocumentHandle, offset: u64, bytes: &[u8]) -> 
 }
 
 fn replace_range(document: &mut FileDocumentHandle, offset: u64, remove_len: u64, replacement: &[u8]) -> bool {
-    if document.materialized.is_none() && remove_len != replacement.len() as u64 && !materialize_document(document) {
+    if document.pieces.is_none() && remove_len != replacement.len() as u64 && !ensure_piece_table(document) {
         return false;
     }
 
-    if let Some(materialized) = &mut document.materialized {
-        let start = offset as usize;
-        let end = match start.checked_add(remove_len as usize) {
-            Some(value) => value,
-            None => return false,
-        };
-        if end > materialized.len() {
-            return false;
-        }
-
-        materialized.splice(start..end, replacement.iter().copied());
-        return true;
+    if let Some(pieces) = &mut document.pieces {
+        return replace_range_in_pieces(pieces, offset, remove_len, replacement);
     }
 
     if remove_len != replacement.len() as u64 {
@@ -264,16 +420,41 @@ fn save_document(
         return false;
     }
 
-    if let Some(materialized) = &document.materialized {
-        const CHUNK_SIZE: usize = 8 * 1024 * 1024;
+    if let Some(pieces) = &document.pieces {
+        const CHUNK_SIZE: u64 = 8 * 1024 * 1024;
         let mut written = 0_u64;
-        for chunk in materialized.chunks(CHUNK_SIZE) {
-            if output.write_all(chunk).is_err() {
-                return false;
-            }
-            written += chunk.len() as u64;
-            if !report_save_progress(progress_callback, user_data, written, total_len) {
-                return false;
+        for piece in pieces {
+            match piece {
+                Piece::Original { start, len } => {
+                    let mut piece_offset = 0_u64;
+                    while piece_offset < *len {
+                        let chunk_len = (*len - piece_offset).min(CHUNK_SIZE);
+                        let bytes = match document.source.read_range(hexapp_core::ByteRange {
+                            start: *start + piece_offset,
+                            len: chunk_len,
+                        }) {
+                            Ok(bytes) => bytes,
+                            Err(_) => return false,
+                        };
+                        if output.write_all(&bytes).is_err() {
+                            return false;
+                        }
+                        piece_offset += bytes.len() as u64;
+                        written += bytes.len() as u64;
+                        if !report_save_progress(progress_callback, user_data, written, total_len) {
+                            return false;
+                        }
+                    }
+                }
+                Piece::Added(bytes) => {
+                    if output.write_all(bytes).is_err() {
+                        return false;
+                    }
+                    written += bytes.len() as u64;
+                    if !report_save_progress(progress_callback, user_data, written, total_len) {
+                        return false;
+                    }
+                }
             }
         }
         if output.flush().is_err() {
@@ -286,7 +467,7 @@ fn save_document(
 
         document.path = target_path.clone();
         document.source = source;
-        document.materialized = None;
+        document.pieces = None;
         document.overwrites.clear();
         document.undo_stack.clear();
         document.redo_stack.clear();
@@ -328,7 +509,7 @@ fn save_document(
 
     document.path = target_path.clone();
     document.source = source;
-    document.materialized = None;
+    document.pieces = None;
     document.overwrites.clear();
     document.undo_stack.clear();
     document.redo_stack.clear();
@@ -340,7 +521,7 @@ fn save_document_in_place(
     progress_callback: Option<SaveProgressCallback>,
     user_data: *mut c_void,
 ) -> bool {
-    if document.materialized.is_some() {
+    if document.pieces.is_some() {
         return false;
     }
 
@@ -475,7 +656,7 @@ pub extern "C" fn hm_file_document_open(path: *const c_char) -> *mut FileDocumen
     Box::into_raw(Box::new(FileDocumentHandle {
         path,
         source,
-        materialized: None,
+        pieces: None,
         overwrites: BTreeMap::new(),
         undo_stack: Vec::new(),
         redo_stack: Vec::new(),
@@ -612,7 +793,7 @@ pub extern "C" fn hm_file_document_insert_range(
     }
 
     let document = unsafe { &mut *handle };
-    if offset > current_len(document) || !materialize_document(document) {
+    if offset > current_len(document) || !ensure_piece_table(document) {
         return false;
     }
 
@@ -649,7 +830,7 @@ pub extern "C" fn hm_file_document_delete_range(
     let Some(before) = current_bytes(document, offset, length as u64) else {
         return false;
     };
-    if !materialize_document(document) || !replace_range(document, offset, length as u64, &[]) {
+    if !ensure_piece_table(document) || !replace_range(document, offset, length as u64, &[]) {
         return false;
     }
 
@@ -669,7 +850,7 @@ pub extern "C" fn hm_file_document_is_dirty(handle: *const FileDocumentHandle) -
     }
 
     unsafe {
-        (*handle).materialized.is_some() || !(*handle).overwrites.is_empty()
+        (*handle).pieces.is_some() || !(*handle).overwrites.is_empty()
     }
 }
 
@@ -689,7 +870,7 @@ pub extern "C" fn hm_file_document_can_save_in_place(handle: *const FileDocument
     }
 
     let document = unsafe { &*handle };
-    !document.source.metadata().read_only && document.materialized.is_none() && !document.overwrites.is_empty()
+    !document.source.metadata().read_only && document.pieces.is_none() && !document.overwrites.is_empty()
 }
 
 #[unsafe(no_mangle)]
@@ -944,6 +1125,212 @@ mod tests {
 
         hm_file_document_close(handle);
         fs::remove_file(path).expect("cleanup temp file");
+    }
+
+    #[test]
+    fn save_persists_insert_without_full_materialization() {
+        let path = create_temp_file("save_insert", &[0x10, 0x20, 0x30, 0x40]);
+        let handle = open_handle(&path);
+
+        let inserted = [0xAA, 0xBB, 0xCC];
+        assert!(hm_file_document_insert_range(
+            handle,
+            2,
+            inserted.as_ptr(),
+            inserted.len()
+        ));
+
+        let path_c = CString::new(path.to_string_lossy().as_bytes()).expect("cstring path");
+        assert!(hm_file_document_save(handle, path_c.as_ptr()));
+        assert_eq!(
+            fs::read(&path).expect("read saved file"),
+            vec![0x10, 0x20, 0xAA, 0xBB, 0xCC, 0x30, 0x40]
+        );
+        assert!(!hm_file_document_is_dirty(handle));
+
+        hm_file_document_close(handle);
+        fs::remove_file(path).expect("cleanup temp file");
+    }
+
+    #[test]
+    fn save_persists_delete_without_full_materialization() {
+        let path = create_temp_file("save_delete", &[1, 2, 3, 4, 5, 6]);
+        let handle = open_handle(&path);
+
+        assert!(hm_file_document_delete_range(handle, 2, 3));
+
+        let path_c = CString::new(path.to_string_lossy().as_bytes()).expect("cstring path");
+        assert!(hm_file_document_save(handle, path_c.as_ptr()));
+        assert_eq!(fs::read(&path).expect("read saved file"), vec![1, 2, 6]);
+        assert!(!hm_file_document_is_dirty(handle));
+
+        hm_file_document_close(handle);
+        fs::remove_file(path).expect("cleanup temp file");
+    }
+
+    #[test]
+    fn save_persists_mixed_insert_delete_and_overwrite() {
+        let path = create_temp_file("save_mixed_structural", &[0x01, 0x02, 0x03, 0x04, 0x05, 0x06]);
+        let handle = open_handle(&path);
+
+        assert!(hm_file_document_delete_range(handle, 1, 2));
+        let inserted = [0xA0, 0xA1, 0xA2];
+        assert!(hm_file_document_insert_range(
+            handle,
+            3,
+            inserted.as_ptr(),
+            inserted.len()
+        ));
+        let overwrite = [0xFF, 0xEE];
+        assert!(hm_file_document_overwrite_range(
+            handle,
+            0,
+            overwrite.as_ptr(),
+            overwrite.len()
+        ));
+
+        let path_c = CString::new(path.to_string_lossy().as_bytes()).expect("cstring path");
+        assert!(hm_file_document_save(handle, path_c.as_ptr()));
+        assert_eq!(
+            fs::read(&path).expect("read saved file"),
+            vec![0xFF, 0xEE, 0x05, 0xA0, 0xA1, 0xA2, 0x06]
+        );
+        assert!(!hm_file_document_is_dirty(handle));
+
+        hm_file_document_close(handle);
+        fs::remove_file(path).expect("cleanup temp file");
+    }
+
+    #[test]
+    fn save_persists_insert_at_start_and_end() {
+        let path = create_temp_file("save_insert_edges", &[0x10, 0x20, 0x30]);
+        let handle = open_handle(&path);
+
+        let prefix = [0xAA, 0xAB];
+        let suffix = [0xFE, 0xFF];
+        assert!(hm_file_document_insert_range(
+            handle,
+            0,
+            prefix.as_ptr(),
+            prefix.len()
+        ));
+        assert!(hm_file_document_insert_range(
+            handle,
+            hm_file_document_size(handle),
+            suffix.as_ptr(),
+            suffix.len()
+        ));
+
+        let path_c = CString::new(path.to_string_lossy().as_bytes()).expect("cstring path");
+        assert!(hm_file_document_save(handle, path_c.as_ptr()));
+        assert_eq!(
+            fs::read(&path).expect("read saved file"),
+            vec![0xAA, 0xAB, 0x10, 0x20, 0x30, 0xFE, 0xFF]
+        );
+
+        hm_file_document_close(handle);
+        fs::remove_file(path).expect("cleanup temp file");
+    }
+
+    #[test]
+    fn save_persists_delete_at_start_and_end() {
+        let path = create_temp_file("save_delete_edges", &[1, 2, 3, 4, 5, 6]);
+        let handle = open_handle(&path);
+
+        assert!(hm_file_document_delete_range(handle, 0, 2));
+        assert!(hm_file_document_delete_range(handle, hm_file_document_size(handle) - 2, 2));
+
+        let path_c = CString::new(path.to_string_lossy().as_bytes()).expect("cstring path");
+        assert!(hm_file_document_save(handle, path_c.as_ptr()));
+        assert_eq!(fs::read(&path).expect("read saved file"), vec![3, 4]);
+
+        hm_file_document_close(handle);
+        fs::remove_file(path).expect("cleanup temp file");
+    }
+
+    #[test]
+    fn save_persists_multiple_separated_structural_edits() {
+        let path = create_temp_file("save_multi_structural", &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        let handle = open_handle(&path);
+
+        let first_insert = [0xA0, 0xA1];
+        let second_insert = [0xB0];
+        assert!(hm_file_document_insert_range(
+            handle,
+            2,
+            first_insert.as_ptr(),
+            first_insert.len()
+        ));
+        assert!(hm_file_document_delete_range(handle, 6, 2));
+        assert!(hm_file_document_insert_range(
+            handle,
+            hm_file_document_size(handle) - 1,
+            second_insert.as_ptr(),
+            second_insert.len()
+        ));
+
+        let path_c = CString::new(path.to_string_lossy().as_bytes()).expect("cstring path");
+        assert!(hm_file_document_save(handle, path_c.as_ptr()));
+        assert_eq!(
+            fs::read(&path).expect("read saved file"),
+            vec![0, 1, 0xA0, 0xA1, 2, 3, 6, 7, 8, 0xB0, 9]
+        );
+
+        hm_file_document_close(handle);
+        fs::remove_file(path).expect("cleanup temp file");
+    }
+
+    #[test]
+    fn save_after_undo_and_redo_persists_expected_state() {
+        let path = create_temp_file("save_after_undo_redo", &[0x10, 0x20, 0x30, 0x40, 0x50]);
+        let handle = open_handle(&path);
+
+        let inserted = [0x99, 0x98];
+        assert!(hm_file_document_insert_range(
+            handle,
+            2,
+            inserted.as_ptr(),
+            inserted.len()
+        ));
+        assert!(hm_file_document_delete_range(handle, 1, 1));
+        assert!(hm_file_document_undo(handle));
+        assert!(hm_file_document_redo(handle));
+
+        let path_c = CString::new(path.to_string_lossy().as_bytes()).expect("cstring path");
+        assert!(hm_file_document_save(handle, path_c.as_ptr()));
+        assert_eq!(
+            fs::read(&path).expect("read saved file"),
+            vec![0x10, 0x99, 0x98, 0x30, 0x40, 0x50]
+        );
+
+        hm_file_document_close(handle);
+        fs::remove_file(path).expect("cleanup temp file");
+    }
+
+    #[test]
+    fn structural_save_as_writes_expected_bytes() {
+        let source_path = create_temp_file("save_as_structural_source", &[0x01, 0x02, 0x03, 0x04]);
+        let target_path = unique_temp_path("save_as_structural_target");
+        let handle = open_handle(&source_path);
+
+        let inserted = [0xAA, 0xBB];
+        assert!(hm_file_document_delete_range(handle, 1, 2));
+        assert!(hm_file_document_insert_range(
+            handle,
+            1,
+            inserted.as_ptr(),
+            inserted.len()
+        ));
+
+        let target_c = CString::new(target_path.to_string_lossy().as_bytes()).expect("cstring target");
+        assert!(hm_file_document_save(handle, target_c.as_ptr()));
+        assert_eq!(fs::read(&target_path).expect("read save-as file"), vec![0x01, 0xAA, 0xBB, 0x04]);
+        assert_eq!(read_all(handle), vec![0x01, 0xAA, 0xBB, 0x04]);
+        assert!(!hm_file_document_is_dirty(handle));
+
+        hm_file_document_close(handle);
+        fs::remove_file(source_path).expect("cleanup source");
+        fs::remove_file(target_path).expect("cleanup target");
     }
 
     #[test]
