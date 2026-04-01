@@ -1,0 +1,15 @@
+[package]
+name = "hexapp-ffi"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+hexapp-core = { path = "../hexapp-core" }
+hexapp-io = { path = "../hexapp-io" }
+hexapp-session = { path = "../hexapp-session" }
+thiserror.workspace = true

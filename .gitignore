@@ -1,0 +1,55 @@
+# OS and editor noise
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Rust
+/target/
+/target_verify*/
+
+# Local verification scratch
+/verify/
+
+# Build outputs
+/build/
+*.log
+*.tmp
+*.bak
+
+# CMake and Qt Creator
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+Makefile
+*.autogen/
+*.qtc_clangd/
+
+# Visual Studio and MSVC
+.vs/
+*.VC.db
+*.VC.opendb
+*.sln.docstates
+*.vcxproj.user
+*.user
+*.suo
+*.pdb
+*.obj
+*.ilk
+*.idb
+*.ipdb
+*.iobj
+
+# Windows binaries and libraries
+*.dll
+*.exe
+*.lib
+*.exp
+
+# Project-specific local logs
+aqtinstall.log

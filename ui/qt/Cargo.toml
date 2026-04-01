@@ -1,0 +1,9 @@
+[package]
+name = "hexapp-qt-bootstrap"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+hexapp-ffi = { path = "../../crates/hexapp-ffi" }

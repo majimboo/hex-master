@@ -1,0 +1,10 @@
+[package]
+name = "hexapp-search"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+hexapp-core = { path = "../hexapp-core" }
+serde.workspace = true
