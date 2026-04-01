@@ -6,7 +6,7 @@
 
 Hex Master is a Windows-first hex editor and binary file editor built with a Rust core and a Qt desktop shell.
 
-It is designed as a modern desktop alternative to Hex Workshop for inspecting and editing binary data, executable files, save files, firmware images, and other raw byte-oriented formats.
+It is designed as a modern desktop alternative to Hex Workshop for inspecting and editing binary data, executable files, save files, firmware images, and other raw byte-oriented formats, including large binary files and multi-GB data sets.
 
 ![Hex Master main window](docs/assets/screenshots/hexmaster-main-window.png)
 
@@ -21,8 +21,20 @@ It is designed as a modern desktop alternative to Hex Workshop for inspecting an
 - byte-pattern, text, and typed-value search
 - unified replace workflow for replace-next and replace-all
 - search results table with match navigation
+- loads and browses large binary files efficiently, including multi-GB data sets
 - bookmarks, checksums, recent files, and session restore
 - configurable viewport layout with persisted gutters, offsets, row numbers, and bytes-per-row
+
+## Large File Handling
+
+Hex Master is designed to work on large binary files without treating open as a full-buffer load into the UI.
+
+- the viewport reads only the visible region plus a bounded cache window instead of materializing the entire file for display
+- scrolling, inspection, and navigation operate on targeted range reads, which keeps startup fast even on multi-GB files
+- search scans the file in chunks rather than building one giant in-memory search buffer
+- save writes data in chunks with progress reporting, which keeps memory use controlled during large writes
+
+This is mainly a practical engineering choice: keep the desktop shell responsive, avoid unnecessary memory growth, and make large-file work predictable on ordinary machines.
 
 ## Download
 

@@ -213,6 +213,30 @@ bool HexView::save_as(const QString& path) {
     return saved;
 }
 
+bool HexView::save_with_progress(const std::function<bool(qint64, qint64)>& progress_callback) {
+    const bool saved = source_.save_with_progress(progress_callback);
+    if (saved) {
+        ++render_generation_;
+        invalidate_row_cache();
+        emit document_loaded(source_.display_name(), static_cast<qulonglong>(source_.size()));
+        emit_status();
+        viewport()->update();
+    }
+    return saved;
+}
+
+bool HexView::save_as_with_progress(const QString& path, const std::function<bool(qint64, qint64)>& progress_callback) {
+    const bool saved = source_.save_as_with_progress(path, progress_callback);
+    if (saved) {
+        ++render_generation_;
+        invalidate_row_cache();
+        emit document_loaded(source_.display_name(), static_cast<qulonglong>(source_.size()));
+        emit_status();
+        viewport()->update();
+    }
+    return saved;
+}
+
 bool HexView::undo() {
     const bool undone = source_.undo();
     if (undone) {
@@ -411,9 +435,19 @@ bool HexView::fill_selection(quint8 value) {
     return overwrite_selection(QByteArray(static_cast<int>(selection_size()), static_cast<char>(value)));
 }
 
-bool HexView::find_pattern(const QByteArray& pattern, bool forward, bool from_caret, qint64* found_offset) {
+bool HexView::find_pattern(
+    const QByteArray& pattern,
+    bool forward,
+    bool from_caret,
+    qint64* found_offset,
+    bool* canceled,
+    const SearchProgressCallback& progress_callback) {
     if (!has_document() || pattern.isEmpty()) {
         return false;
+    }
+
+    if (canceled != nullptr) {
+        *canceled = false;
     }
 
     qint64 start_offset = 0;
@@ -423,11 +457,43 @@ bool HexView::find_pattern(const QByteArray& pattern, bool forward, bool from_ca
         start_offset = forward ? 0 : document_size() - 1;
     }
 
-    qint64 match = search_from(pattern, start_offset, forward, 0, document_size());
-    if (match < 0 && from_caret) {
-        match = search_from(pattern, forward ? 0 : document_size() - 1, forward, 0, document_size());
+    const qint64 range_start = 0;
+    const qint64 range_end = document_size();
+    const qint64 first_pass_total = forward ? qMax<qint64>(0, range_end - qBound(range_start, start_offset, range_end))
+                                            : qMax<qint64>(0, qBound(range_start, start_offset, range_end - 1) - range_start + 1);
+    const qint64 second_pass_total = from_caret ? qMax<qint64>(0, (range_end - range_start) - first_pass_total) : 0;
+
+    bool search_canceled = false;
+    const auto report_first_pass = [&](qint64 completed, qint64 total) -> bool {
+        Q_UNUSED(total);
+        if (!progress_callback) {
+            return true;
+        }
+        const bool keep_going = progress_callback(completed, first_pass_total + second_pass_total);
+        search_canceled = !keep_going;
+        return keep_going;
+    };
+
+    qint64 match = search_from(pattern, start_offset, forward, range_start, range_end, report_first_pass);
+    if (match < 0 && from_caret && !search_canceled) {
+        const auto report_second_pass = [&](qint64 completed, qint64 total) -> bool {
+            Q_UNUSED(total);
+            if (!progress_callback) {
+                return true;
+            }
+            const bool keep_going = progress_callback(first_pass_total + completed, first_pass_total + second_pass_total);
+            search_canceled = !keep_going;
+            return keep_going;
+        };
+        match = search_from(pattern, forward ? 0 : document_size() - 1, forward, range_start, range_end, report_second_pass);
+    }
+    if (progress_callback && !search_canceled) {
+        progress_callback(first_pass_total + second_pass_total, first_pass_total + second_pass_total);
     }
     if (match < 0) {
+        if (canceled != nullptr && search_canceled) {
+            *canceled = true;
+        }
         return false;
     }
 
@@ -445,9 +511,19 @@ bool HexView::find_pattern(const QByteArray& pattern, bool forward, bool from_ca
     return true;
 }
 
-bool HexView::find_pattern_in_selection(const QByteArray& pattern, bool forward, bool from_caret, qint64* found_offset) {
+bool HexView::find_pattern_in_selection(
+    const QByteArray& pattern,
+    bool forward,
+    bool from_caret,
+    qint64* found_offset,
+    bool* canceled,
+    const SearchProgressCallback& progress_callback) {
     if (!has_document() || pattern.isEmpty() || !has_selection()) {
         return false;
+    }
+
+    if (canceled != nullptr) {
+        *canceled = false;
     }
 
     const qint64 range_start = selection_start();
@@ -463,11 +539,41 @@ bool HexView::find_pattern_in_selection(const QByteArray& pattern, bool forward,
             : qBound(range_start, caret_offset_ - 1, range_end - 1);
     }
 
-    qint64 match = search_from(pattern, start_offset, forward, range_start, range_end);
-    if (match < 0 && from_caret) {
-        match = search_from(pattern, forward ? range_start : range_end - 1, forward, range_start, range_end);
+    const qint64 first_pass_total = forward ? qMax<qint64>(0, range_end - qBound(range_start, start_offset, range_end))
+                                            : qMax<qint64>(0, qBound(range_start, start_offset, range_end - 1) - range_start + 1);
+    const qint64 second_pass_total = from_caret ? qMax<qint64>(0, (range_end - range_start) - first_pass_total) : 0;
+
+    bool search_canceled = false;
+    const auto report_first_pass = [&](qint64 completed, qint64 total) -> bool {
+        Q_UNUSED(total);
+        if (!progress_callback) {
+            return true;
+        }
+        const bool keep_going = progress_callback(completed, first_pass_total + second_pass_total);
+        search_canceled = !keep_going;
+        return keep_going;
+    };
+
+    qint64 match = search_from(pattern, start_offset, forward, range_start, range_end, report_first_pass);
+    if (match < 0 && from_caret && !search_canceled) {
+        const auto report_second_pass = [&](qint64 completed, qint64 total) -> bool {
+            Q_UNUSED(total);
+            if (!progress_callback) {
+                return true;
+            }
+            const bool keep_going = progress_callback(first_pass_total + completed, first_pass_total + second_pass_total);
+            search_canceled = !keep_going;
+            return keep_going;
+        };
+        match = search_from(pattern, forward ? range_start : range_end - 1, forward, range_start, range_end, report_second_pass);
+    }
+    if (progress_callback && !search_canceled) {
+        progress_callback(first_pass_total + second_pass_total, first_pass_total + second_pass_total);
     }
     if (match < 0) {
+        if (canceled != nullptr && search_canceled) {
+            *canceled = true;
+        }
         return false;
     }
 
@@ -485,10 +591,18 @@ bool HexView::find_pattern_in_selection(const QByteArray& pattern, bool forward,
     return true;
 }
 
-QVector<qint64> HexView::find_all_patterns(const QByteArray& pattern, bool selection_only) const {
+QVector<qint64> HexView::find_all_patterns(
+    const QByteArray& pattern,
+    bool selection_only,
+    bool* canceled,
+    const SearchProgressCallback& progress_callback) const {
     QVector<qint64> matches;
     if (!has_document() || pattern.isEmpty()) {
         return matches;
+    }
+
+    if (canceled != nullptr) {
+        *canceled = false;
     }
 
     const qint64 range_start = selection_only && has_selection() ? selection_start() : 0;
@@ -498,14 +612,32 @@ QVector<qint64> HexView::find_all_patterns(const QByteArray& pattern, bool selec
     }
 
     qint64 cursor = range_start;
+    bool search_canceled = false;
     while (cursor <= range_end - pattern.size()) {
-        const qint64 found = search_from(pattern, cursor, true, range_start, range_end);
+        const qint64 base_completed = qMax<qint64>(0, cursor - range_start);
+        const auto report_progress = [&](qint64 completed, qint64 total) -> bool {
+            Q_UNUSED(total);
+            if (!progress_callback) {
+                return true;
+            }
+            const bool keep_going = progress_callback(base_completed + completed, range_end - range_start);
+            search_canceled = !keep_going;
+            return keep_going;
+        };
+        const qint64 found = search_from(pattern, cursor, true, range_start, range_end, report_progress);
         if (found < 0) {
             break;
         }
 
         matches.push_back(found);
         cursor = found + 1;
+    }
+
+    if (progress_callback && !search_canceled) {
+        progress_callback(range_end - range_start, range_end - range_start);
+    }
+    if (canceled != nullptr && search_canceled) {
+        *canceled = true;
     }
 
     return matches;
@@ -642,9 +774,19 @@ bool HexView::replace_range(qint64 offset, const QByteArray& before, const QByte
     return true;
 }
 
-qint64 HexView::replace_all(const QByteArray& before, const QByteArray& after, bool selection_only) {
+qint64 HexView::replace_all(
+    const QByteArray& before,
+    const QByteArray& after,
+    bool selection_only,
+    QVector<qint64>* replaced_offsets,
+    bool* canceled,
+    const SearchProgressCallback& progress_callback) {
     if (!has_document() || is_read_only() || before.isEmpty()) {
         return 0;
+    }
+
+    if (canceled != nullptr) {
+        *canceled = false;
     }
 
     if (edit_mode_ == EditMode::Overwrite && before.size() != after.size()) {
@@ -660,8 +802,19 @@ qint64 HexView::replace_all(const QByteArray& before, const QByteArray& after, b
     qint64 replacements = 0;
     qint64 cursor = range_start;
     qint64 last_replaced = -1;
+    bool replace_canceled = false;
     while (cursor <= range_end - before.size()) {
-        const qint64 found = search_from(before, cursor, true, range_start, range_end);
+        const qint64 base_completed = qMax<qint64>(0, cursor - range_start);
+        const auto report_progress = [&](qint64 completed, qint64 total) -> bool {
+            Q_UNUSED(total);
+            if (!progress_callback) {
+                return true;
+            }
+            const bool keep_going = progress_callback(base_completed + completed, range_end - range_start);
+            replace_canceled = !keep_going;
+            return keep_going;
+        };
+        const qint64 found = search_from(before, cursor, true, range_start, range_end, report_progress);
         if (found < 0) {
             break;
         }
@@ -671,9 +824,19 @@ qint64 HexView::replace_all(const QByteArray& before, const QByteArray& after, b
         }
 
         ++replacements;
+        if (replaced_offsets != nullptr) {
+            replaced_offsets->push_back(found);
+        }
         last_replaced = found;
         cursor = found + after.size();
         range_end += after.size() - before.size();
+    }
+
+    if (progress_callback && !replace_canceled) {
+        progress_callback(range_end - range_start, range_end - range_start);
+    }
+    if (canceled != nullptr && replace_canceled) {
+        *canceled = true;
     }
 
     if (replacements > 0) {
@@ -2070,7 +2233,13 @@ bool HexView::try_parse_hex_string(const QString& text, QByteArray& bytes) {
     return true;
 }
 
-qint64 HexView::search_from(const QByteArray& pattern, qint64 start_offset, bool forward, qint64 range_start, qint64 range_end) const {
+qint64 HexView::search_from(
+    const QByteArray& pattern,
+    qint64 start_offset,
+    bool forward,
+    qint64 range_start,
+    qint64 range_end,
+    const SearchProgressCallback& progress_callback) const {
     if (!has_document() || pattern.isEmpty()) {
         return -1;
     }
@@ -2083,8 +2252,19 @@ qint64 HexView::search_from(const QByteArray& pattern, qint64 start_offset, bool
         return -1;
     }
 
+    const qint64 clamped_start = forward
+        ? qBound(bounded_start, start_offset, bounded_end)
+        : qBound(bounded_start, start_offset, bounded_end - 1);
+    const qint64 total = forward
+        ? qMax<qint64>(0, bounded_end - clamped_start)
+        : qMax<qint64>(0, clamped_start - bounded_start + 1);
+
+    if (progress_callback && !progress_callback(0, total)) {
+        return -1;
+    }
+
     if (forward) {
-        for (qint64 offset = qBound(bounded_start, start_offset, bounded_end); offset < bounded_end;) {
+        for (qint64 offset = clamped_start; offset < bounded_end;) {
             const qint64 to_read = qMin(bounded_end - offset, kChunkSize + overlap);
             const QByteArray chunk = source_.read_range(offset, to_read);
             if (chunk.isEmpty()) {
@@ -2096,6 +2276,10 @@ qint64 HexView::search_from(const QByteArray& pattern, qint64 start_offset, bool
                 return offset + index;
             }
 
+            if (progress_callback && !progress_callback(qMin(total, (offset - clamped_start) + chunk.size()), total)) {
+                return -1;
+            }
+
             if (chunk.size() <= overlap) {
                 break;
             }
@@ -2105,14 +2289,14 @@ qint64 HexView::search_from(const QByteArray& pattern, qint64 start_offset, bool
         return -1;
     }
 
-    for (qint64 chunk_end = qMin(bounded_end, start_offset + 1); chunk_end > bounded_start;) {
+    for (qint64 chunk_end = qMin(bounded_end, clamped_start + 1); chunk_end > bounded_start;) {
         const qint64 chunk_start = qMax(bounded_start, chunk_end - (kChunkSize + overlap));
         const QByteArray chunk = source_.read_range(chunk_start, chunk_end - chunk_start);
         if (chunk.isEmpty()) {
             break;
         }
 
-        const qint64 max_index = qMin<qint64>(chunk.size() - pattern.size(), start_offset - chunk_start);
+        const qint64 max_index = qMin<qint64>(chunk.size() - pattern.size(), clamped_start - chunk_start);
         for (qint64 index = max_index; index >= 0; --index) {
             bool matched = true;
             for (int pattern_index = 0; pattern_index < pattern.size(); ++pattern_index) {
@@ -2126,11 +2310,14 @@ qint64 HexView::search_from(const QByteArray& pattern, qint64 start_offset, bool
             }
         }
 
+        if (progress_callback && !progress_callback(qMin(total, clamped_start - chunk_start + 1), total)) {
+            return -1;
+        }
+
         if (chunk_start == bounded_start) {
             break;
         }
         chunk_end = chunk_start + overlap;
-        start_offset = qMin(qMax(start_offset, bounded_start), chunk_end - 1);
     }
 
     return -1;

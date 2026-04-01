@@ -5,12 +5,16 @@
 #include <QMap>
 #include <QVector>
 
+#include <functional>
+
 #include "file_byte_source.hpp"
 
 class HexView final : public QAbstractScrollArea {
     Q_OBJECT
 
 public:
+    using SearchProgressCallback = std::function<bool(qint64, qint64)>;
+
     enum class EditMode {
         Insert,
         Overwrite,
@@ -75,6 +79,8 @@ public:
     bool is_dirty() const;
     bool save();
     bool save_as(const QString& path);
+    bool save_with_progress(const std::function<bool(qint64, qint64)>& progress_callback);
+    bool save_as_with_progress(const QString& path, const std::function<bool(qint64, qint64)>& progress_callback);
     bool undo();
     bool redo();
     bool has_selection() const;
@@ -96,14 +102,14 @@ public:
     bool set_bookmark_label(qint64 offset, const QString& label);
     bool set_bookmark_color(qint64 offset, const QColor& color);
     bool remove_bookmark(qint64 offset);
-    bool find_pattern(const QByteArray& pattern, bool forward, bool from_caret, qint64* found_offset = nullptr);
-    bool find_pattern_in_selection(const QByteArray& pattern, bool forward, bool from_caret, qint64* found_offset = nullptr);
-    QVector<qint64> find_all_patterns(const QByteArray& pattern, bool selection_only = false) const;
+    bool find_pattern(const QByteArray& pattern, bool forward, bool from_caret, qint64* found_offset = nullptr, bool* canceled = nullptr, const SearchProgressCallback& progress_callback = SearchProgressCallback());
+    bool find_pattern_in_selection(const QByteArray& pattern, bool forward, bool from_caret, qint64* found_offset = nullptr, bool* canceled = nullptr, const SearchProgressCallback& progress_callback = SearchProgressCallback());
+    QVector<qint64> find_all_patterns(const QByteArray& pattern, bool selection_only = false, bool* canceled = nullptr, const SearchProgressCallback& progress_callback = SearchProgressCallback()) const;
     QString format_search_result(qint64 found_offset, const QByteArray& pattern, bool hex_mode) const;
     QString build_hash_report(bool selection_only) const;
     QVector<AnalysisRow> analysis_rows(bool selection_only) const;
     bool replace_range(qint64 offset, const QByteArray& before, const QByteArray& after);
-    qint64 replace_all(const QByteArray& before, const QByteArray& after, bool selection_only);
+    qint64 replace_all(const QByteArray& before, const QByteArray& after, bool selection_only, QVector<qint64>* replaced_offsets = nullptr, bool* canceled = nullptr, const SearchProgressCallback& progress_callback = SearchProgressCallback());
     InspectorEndian inspector_endian() const;
     void set_inspector_endian(InspectorEndian endian);
     QVector<InspectorRow> inspector_rows() const;
@@ -206,7 +212,7 @@ private:
     QString format_inspector_text() const;
     QVector<AnalysisRow> build_analysis_rows(bool selection_only) const;
     static bool try_parse_hex_string(const QString& text, QByteArray& bytes);
-    qint64 search_from(const QByteArray& pattern, qint64 start_offset, bool forward, qint64 range_start = -1, qint64 range_end = -1) const;
+    qint64 search_from(const QByteArray& pattern, qint64 start_offset, bool forward, qint64 range_start = -1, qint64 range_end = -1, const SearchProgressCallback& progress_callback = SearchProgressCallback()) const;
     void leaveEvent(QEvent* event) override;
 
     FileByteSource source_;

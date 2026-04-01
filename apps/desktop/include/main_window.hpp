@@ -4,6 +4,8 @@
 #include <QString>
 #include <QStringList>
 
+#include <functional>
+
 class QDockWidget;
 class QLabel;
 class QAction;
@@ -16,6 +18,7 @@ class QActionGroup;
 class QToolBar;
 class QMenu;
 class QWidget;
+class QTabWidget;
 
 class MainWindow final : public QMainWindow {
     Q_OBJECT
@@ -80,10 +83,13 @@ private:
     QString preferred_dialog_directory(const QString& fallback_file_name = QString()) const;
     void remember_dialog_path(const QString& path);
     void add_goto_offset_history(const QString& text);
+    void add_search_history(const QString& text);
+    void add_replace_history(const QString& text);
     void refresh_goto_offset_widgets();
     SaveBackupPolicy save_backup_policy() const;
     bool confirm_explicit_save(const QString& title) const;
-    bool prepare_backup_for_save(const QString& path);
+    bool prepare_backup_for_save(const QString& path, const std::function<bool(qint64, qint64, const QString&)>& progress_callback);
+    static bool copy_file_with_progress(const QString& source_path, const QString& target_path, const std::function<bool(qint64, qint64, const QString&)>& progress_callback);
     bool save_current_document(bool confirm_save, const QString* save_as_path = nullptr);
     static QString backup_path_for(const QString& path);
     bool confirm_discard_changes();
@@ -139,8 +145,9 @@ private:
     void recolor_current_bookmark();
     void remove_current_bookmark();
     void copy_current_tree_value(QTreeWidget* tree);
-    void show_search_summary(const QString& summary);
-    void show_search_matches(const QString& summary, const QVector<qint64>& matches);
+    void close_search_results_tab(int index);
+    void show_search_summary(const QString& summary, const QString& tab_title = QString());
+    void show_search_matches(const QString& summary, const QVector<qint64>& matches, const QString& tab_title = QString());
     void activate_search_result_item();
     bool prompt_for_replace_operation(
         QByteArray& before,
@@ -171,7 +178,7 @@ private:
     QDockWidget* analysis_dock_ = nullptr;
     QTreeWidget* bookmarks_tree_ = nullptr;
     QTreeWidget* inspector_tree_ = nullptr;
-    QTreeWidget* search_results_tree_ = nullptr;
+    QTabWidget* search_results_tabs_ = nullptr;
     QTreeWidget* analysis_tree_ = nullptr;
     QLabel* status_label_ = nullptr;
     QToolBar* toolbar_ = nullptr;
@@ -221,6 +228,18 @@ private:
     NumericSearchType last_search_numeric_type_ = NumericSearchType::Unsigned32;
     SearchByteOrder last_search_numeric_byte_order_ = SearchByteOrder::Little;
     QString last_search_display_text_;
+    SearchExecution last_search_execution_ = SearchExecution::FindNext;
+    bool last_search_selection_only_ = false;
+    QString last_replace_display_text_;
+    SearchInputMode last_replace_input_mode_ = SearchInputMode::Text;
+    SearchTextEncoding last_replace_text_encoding_ = SearchTextEncoding::Utf8;
+    NumericSearchType last_replace_numeric_type_ = NumericSearchType::Unsigned32;
+    SearchByteOrder last_replace_numeric_byte_order_ = SearchByteOrder::Little;
+    SearchExecution last_replace_execution_ = SearchExecution::FindNext;
+    bool last_replace_selection_only_ = false;
     QStringList recent_files_;
     QStringList goto_offset_history_;
+    QStringList search_history_;
+    QStringList replace_history_;
+    int search_results_counter_ = 0;
 };

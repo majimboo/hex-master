@@ -4,6 +4,7 @@
 #include <cstdint>
 
 struct FileDocumentHandle;
+using HmSaveProgressCallback = bool (*)(std::uint64_t completed, std::uint64_t total, void* user_data);
 
 extern "C" {
 FileDocumentHandle* hm_file_document_open(const char* path);
@@ -35,6 +36,11 @@ bool hm_file_document_delete_range(
 bool hm_file_document_is_read_only(const FileDocumentHandle* handle);
 bool hm_file_document_is_dirty(const FileDocumentHandle* handle);
 bool hm_file_document_save(FileDocumentHandle* handle, const char* path);
+bool hm_file_document_save_with_progress(
+    FileDocumentHandle* handle,
+    const char* path,
+    HmSaveProgressCallback progress_callback,
+    void* user_data);
 bool hm_file_document_undo(FileDocumentHandle* handle);
 bool hm_file_document_redo(FileDocumentHandle* handle);
 }

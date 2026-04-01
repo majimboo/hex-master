@@ -3,6 +3,8 @@
 #include <QByteArray>
 #include <QString>
 
+#include <functional>
+
 struct FileDocumentHandle;
 
 class FileByteSource final {
@@ -30,6 +32,8 @@ public:
     bool is_dirty() const;
     bool save();
     bool save_as(const QString& path);
+    bool save_with_progress(const std::function<bool(qint64, qint64)>& progress_callback);
+    bool save_as_with_progress(const QString& path, const std::function<bool(qint64, qint64)>& progress_callback);
     bool undo();
     bool redo();
 

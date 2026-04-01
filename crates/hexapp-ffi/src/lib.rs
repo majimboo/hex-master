@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::ffi::{c_char, CStr};
+use std::ffi::{c_char, c_void, CStr};
 use std::fs;
 use std::fs::File;
 use std::io::Write;
@@ -75,6 +75,8 @@ pub struct FileDocumentHandle {
     undo_stack: Vec<EditRecord>,
     redo_stack: Vec<EditRecord>,
 }
+
+type SaveProgressCallback = extern "C" fn(completed: u64, total: u64, user_data: *mut c_void) -> bool;
 
 fn path_from_c(path: *const c_char) -> Option<PathBuf> {
     if path.is_null() {
@@ -234,14 +236,47 @@ fn replace_range(document: &mut FileDocumentHandle, offset: u64, remove_len: u64
     apply_bytes(document, offset, replacement)
 }
 
-fn save_document(document: &mut FileDocumentHandle, target_path: &PathBuf) -> bool {
+fn report_save_progress(
+    callback: Option<SaveProgressCallback>,
+    user_data: *mut c_void,
+    completed: u64,
+    total: u64,
+) -> bool {
+    match callback {
+        Some(callback) => callback(completed, total, user_data),
+        None => true,
+    }
+}
+
+fn save_document(
+    document: &mut FileDocumentHandle,
+    target_path: &PathBuf,
+    progress_callback: Option<SaveProgressCallback>,
+    user_data: *mut c_void,
+) -> bool {
     let mut output = match File::create(target_path) {
         Ok(file) => file,
         Err(_) => return false,
     };
 
+    let total_len = current_len(document);
+    if !report_save_progress(progress_callback, user_data, 0, total_len) {
+        return false;
+    }
+
     if let Some(materialized) = &document.materialized {
-        if output.write_all(materialized).is_err() || output.flush().is_err() {
+        const CHUNK_SIZE: usize = 8 * 1024 * 1024;
+        let mut written = 0_u64;
+        for chunk in materialized.chunks(CHUNK_SIZE) {
+            if output.write_all(chunk).is_err() {
+                return false;
+            }
+            written += chunk.len() as u64;
+            if !report_save_progress(progress_callback, user_data, written, total_len) {
+                return false;
+            }
+        }
+        if output.flush().is_err() {
             return false;
         }
 
@@ -259,7 +294,7 @@ fn save_document(document: &mut FileDocumentHandle, target_path: &PathBuf) -> bo
     }
 
     let mut offset = 0_u64;
-    const CHUNK_SIZE: u64 = 1024 * 1024;
+    const CHUNK_SIZE: u64 = 8 * 1024 * 1024;
 
     while offset < document.source.len() {
         let len = (document.source.len() - offset).min(CHUNK_SIZE);
@@ -278,6 +313,9 @@ fn save_document(document: &mut FileDocumentHandle, target_path: &PathBuf) -> bo
         }
 
         offset += bytes.len() as u64;
+        if !report_save_progress(progress_callback, user_data, offset, total_len) {
+            return false;
+        }
     }
 
     if output.flush().is_err() {
@@ -596,6 +634,16 @@ pub extern "C" fn hm_file_document_redo(handle: *mut FileDocumentHandle) -> bool
 
 #[unsafe(no_mangle)]
 pub extern "C" fn hm_file_document_save(handle: *mut FileDocumentHandle, path: *const c_char) -> bool {
+    hm_file_document_save_with_progress(handle, path, None, ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn hm_file_document_save_with_progress(
+    handle: *mut FileDocumentHandle,
+    path: *const c_char,
+    progress_callback: Option<SaveProgressCallback>,
+    user_data: *mut c_void,
+) -> bool {
     if handle.is_null() {
         return false;
     }
@@ -608,7 +656,7 @@ pub extern "C" fn hm_file_document_save(handle: *mut FileDocumentHandle, path: *
 
     if document.path == target_path {
         let temp_path = temp_save_path_for(&target_path);
-        if !save_document(document, &temp_path) {
+        if !save_document(document, &temp_path, progress_callback, user_data) {
             let _ = fs::remove_file(&temp_path);
             return false;
         }
@@ -628,7 +676,7 @@ pub extern "C" fn hm_file_document_save(handle: *mut FileDocumentHandle, path: *
         return true;
     }
 
-    save_document(document, &target_path)
+    save_document(document, &target_path, progress_callback, user_data)
 }
 
 #[cfg(test)]

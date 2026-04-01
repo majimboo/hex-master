@@ -6,6 +6,19 @@
 
 namespace {
 constexpr qint64 kReadCacheWindow = 256 * 1024;
+
+struct SaveProgressContext {
+    const std::function<bool(qint64, qint64)>* callback = nullptr;
+};
+
+bool save_progress_thunk(std::uint64_t completed, std::uint64_t total, void* user_data) {
+    auto* context = static_cast<SaveProgressContext*>(user_data);
+    if (context == nullptr || context->callback == nullptr) {
+        return true;
+    }
+
+    return (*context->callback)(static_cast<qint64>(completed), static_cast<qint64>(total));
+}
 }
 
 FileByteSource::~FileByteSource() {
@@ -186,16 +199,27 @@ bool FileByteSource::is_dirty() const {
 }
 
 bool FileByteSource::save() {
-    return save_as(path_);
+    return save_as_with_progress(path_, {});
 }
 
 bool FileByteSource::save_as(const QString& path) {
+    return save_as_with_progress(path, {});
+}
+
+bool FileByteSource::save_with_progress(const std::function<bool(qint64, qint64)>& progress_callback) {
+    return save_as_with_progress(path_, progress_callback);
+}
+
+bool FileByteSource::save_as_with_progress(const QString& path, const std::function<bool(qint64, qint64)>& progress_callback) {
     if (handle_ == nullptr || path.isEmpty()) {
         return false;
     }
 
     const QByteArray utf8_path = path.toUtf8();
-    const bool saved = hm_file_document_save(handle_, utf8_path.constData());
+    SaveProgressContext context{&progress_callback};
+    const bool saved = progress_callback
+        ? hm_file_document_save_with_progress(handle_, utf8_path.constData(), save_progress_thunk, &context)
+        : hm_file_document_save(handle_, utf8_path.constData());
     if (!saved) {
         return false;
     }

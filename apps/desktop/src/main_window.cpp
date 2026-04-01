@@ -24,6 +24,8 @@
 #include <QGroupBox>
 #include <QFormLayout>
 #include <QComboBox>
+#include <QElapsedTimer>
+#include <QProgressDialog>
 #include <QStackedWidget>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -32,6 +34,7 @@
 #include <QSettings>
 #include <QStatusBar>
 #include <QStyleOptionButton>
+#include <QTabWidget>
 #include <QTextEdit>
 #include <QTreeWidget>
 #include <QHeaderView>
@@ -428,6 +431,39 @@ void MainWindow::restore_session() {
     QSettings settings;
     recent_files_ = settings.value(QStringLiteral("recentFiles")).toStringList();
     goto_offset_history_ = settings.value(QStringLiteral("gotoOffsetHistory")).toStringList();
+    search_history_ = settings.value(QStringLiteral("search/history")).toStringList();
+    replace_history_ = settings.value(QStringLiteral("replace/history")).toStringList();
+    while (search_history_.size() > 15) {
+        search_history_.removeLast();
+    }
+    while (replace_history_.size() > 15) {
+        replace_history_.removeLast();
+    }
+    last_search_display_text_ = settings.value(QStringLiteral("search/lastText")).toString();
+    last_search_hex_mode_ = settings.value(QStringLiteral("search/lastHexMode"), false).toBool();
+    last_search_input_mode_ = static_cast<SearchInputMode>(
+        settings.value(QStringLiteral("search/lastInputMode"), static_cast<int>(SearchInputMode::Text)).toInt());
+    last_search_text_encoding_ = static_cast<SearchTextEncoding>(
+        settings.value(QStringLiteral("search/lastTextEncoding"), static_cast<int>(SearchTextEncoding::Utf8)).toInt());
+    last_search_numeric_type_ = static_cast<NumericSearchType>(
+        settings.value(QStringLiteral("search/lastNumericType"), static_cast<int>(NumericSearchType::Unsigned32)).toInt());
+    last_search_numeric_byte_order_ = static_cast<SearchByteOrder>(
+        settings.value(QStringLiteral("search/lastByteOrder"), static_cast<int>(SearchByteOrder::Little)).toInt());
+    last_search_execution_ = static_cast<SearchExecution>(
+        settings.value(QStringLiteral("search/lastExecution"), static_cast<int>(SearchExecution::FindNext)).toInt());
+    last_search_selection_only_ = settings.value(QStringLiteral("search/lastSelectionOnly"), false).toBool();
+    last_replace_display_text_ = settings.value(QStringLiteral("replace/lastText")).toString();
+    last_replace_input_mode_ = static_cast<SearchInputMode>(
+        settings.value(QStringLiteral("replace/lastInputMode"), static_cast<int>(SearchInputMode::Text)).toInt());
+    last_replace_text_encoding_ = static_cast<SearchTextEncoding>(
+        settings.value(QStringLiteral("replace/lastTextEncoding"), static_cast<int>(SearchTextEncoding::Utf8)).toInt());
+    last_replace_numeric_type_ = static_cast<NumericSearchType>(
+        settings.value(QStringLiteral("replace/lastNumericType"), static_cast<int>(NumericSearchType::Unsigned32)).toInt());
+    last_replace_numeric_byte_order_ = static_cast<SearchByteOrder>(
+        settings.value(QStringLiteral("replace/lastByteOrder"), static_cast<int>(SearchByteOrder::Little)).toInt());
+    last_replace_execution_ = static_cast<SearchExecution>(
+        settings.value(QStringLiteral("replace/lastExecution"), static_cast<int>(SearchExecution::FindNext)).toInt());
+    last_replace_selection_only_ = settings.value(QStringLiteral("replace/lastSelectionOnly"), false).toBool();
     update_recent_files_menu();
     refresh_goto_offset_widgets();
 
@@ -469,6 +505,23 @@ void MainWindow::save_session() const {
     QSettings settings;
     settings.setValue(QStringLiteral("recentFiles"), recent_files_);
     settings.setValue(QStringLiteral("gotoOffsetHistory"), goto_offset_history_);
+    settings.setValue(QStringLiteral("search/history"), search_history_);
+    settings.setValue(QStringLiteral("replace/history"), replace_history_);
+    settings.setValue(QStringLiteral("search/lastText"), last_search_display_text_);
+    settings.setValue(QStringLiteral("search/lastHexMode"), last_search_hex_mode_);
+    settings.setValue(QStringLiteral("search/lastInputMode"), static_cast<int>(last_search_input_mode_));
+    settings.setValue(QStringLiteral("search/lastTextEncoding"), static_cast<int>(last_search_text_encoding_));
+    settings.setValue(QStringLiteral("search/lastNumericType"), static_cast<int>(last_search_numeric_type_));
+    settings.setValue(QStringLiteral("search/lastByteOrder"), static_cast<int>(last_search_numeric_byte_order_));
+    settings.setValue(QStringLiteral("search/lastExecution"), static_cast<int>(last_search_execution_));
+    settings.setValue(QStringLiteral("search/lastSelectionOnly"), last_search_selection_only_);
+    settings.setValue(QStringLiteral("replace/lastText"), last_replace_display_text_);
+    settings.setValue(QStringLiteral("replace/lastInputMode"), static_cast<int>(last_replace_input_mode_));
+    settings.setValue(QStringLiteral("replace/lastTextEncoding"), static_cast<int>(last_replace_text_encoding_));
+    settings.setValue(QStringLiteral("replace/lastNumericType"), static_cast<int>(last_replace_numeric_type_));
+    settings.setValue(QStringLiteral("replace/lastByteOrder"), static_cast<int>(last_replace_numeric_byte_order_));
+    settings.setValue(QStringLiteral("replace/lastExecution"), static_cast<int>(last_replace_execution_));
+    settings.setValue(QStringLiteral("replace/lastSelectionOnly"), last_replace_selection_only_);
     settings.setValue(QStringLiteral("window/geometry"), saveGeometry());
     settings.setValue(QStringLiteral("window/state"), saveState());
     settings.setValue(QStringLiteral("editor/bytesPerRow"), hex_view_ ? hex_view_->bytes_per_row() : 16);
@@ -548,6 +601,32 @@ void MainWindow::add_goto_offset_history(const QString& text) {
     refresh_goto_offset_widgets();
 }
 
+void MainWindow::add_search_history(const QString& text) {
+    const QString normalized = text.trimmed();
+    if (normalized.isEmpty()) {
+        return;
+    }
+
+    search_history_.removeAll(normalized);
+    search_history_.prepend(normalized);
+    while (search_history_.size() > 15) {
+        search_history_.removeLast();
+    }
+}
+
+void MainWindow::add_replace_history(const QString& text) {
+    const QString normalized = text.trimmed();
+    if (normalized.isEmpty()) {
+        return;
+    }
+
+    replace_history_.removeAll(normalized);
+    replace_history_.prepend(normalized);
+    while (replace_history_.size() > 15) {
+        replace_history_.removeLast();
+    }
+}
+
 void MainWindow::refresh_goto_offset_widgets() {
     if (goto_offset_edit_ == nullptr) {
         return;
@@ -576,6 +655,46 @@ bool MainWindow::confirm_explicit_save(const QString& title) const {
     return response == QMessageBox::Yes;
 }
 
+bool MainWindow::copy_file_with_progress(
+    const QString& source_path,
+    const QString& target_path,
+    const std::function<bool(qint64, qint64, const QString&)>& progress_callback) {
+    QFile source(source_path);
+    if (!source.open(QIODevice::ReadOnly)) {
+        return false;
+    }
+
+    QFile target(target_path);
+    if (!target.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        return false;
+    }
+
+    const qint64 total = source.size();
+    qint64 completed = 0;
+    constexpr qint64 kChunkSize = 8 * 1024 * 1024;
+
+    if (progress_callback && !progress_callback(0, total, QStringLiteral("Creating backup"))) {
+        return false;
+    }
+
+    while (!source.atEnd()) {
+        const QByteArray chunk = source.read(kChunkSize);
+        if (chunk.isEmpty() && source.error() != QFile::NoError) {
+            return false;
+        }
+        if (!chunk.isEmpty() && target.write(chunk) != chunk.size()) {
+            return false;
+        }
+
+        completed += chunk.size();
+        if (progress_callback && !progress_callback(completed, total, QStringLiteral("Creating backup"))) {
+            return false;
+        }
+    }
+
+    return target.flush();
+}
+
 QString MainWindow::backup_path_for(const QString& path) {
     const QFileInfo info(path);
     if (!info.exists()) {
@@ -589,7 +708,7 @@ QString MainWindow::backup_path_for(const QString& path) {
     return info.path() + QDir::separator() + info.completeBaseName() + QStringLiteral(".") + info.suffix() + QStringLiteral(".bak");
 }
 
-bool MainWindow::prepare_backup_for_save(const QString& path) {
+bool MainWindow::prepare_backup_for_save(const QString& path, const std::function<bool(qint64, qint64, const QString&)>& progress_callback) {
     const QFileInfo info(path);
     if (path.isEmpty() || !info.exists()) {
         return true;
@@ -623,7 +742,7 @@ bool MainWindow::prepare_backup_for_save(const QString& path) {
         return false;
     }
 
-    if (!QFile::copy(path, backup_path)) {
+    if (!copy_file_with_progress(path, backup_path, progress_callback)) {
         QMessageBox::warning(this, QStringLiteral("Backup Failed"), QStringLiteral("Could not create a backup copy before saving."));
         return false;
     }
@@ -651,15 +770,88 @@ bool MainWindow::save_current_document(bool confirm_save, const QString* save_as
         return false;
     }
 
+    QProgressDialog progress_dialog(this);
+    progress_dialog.setWindowTitle(QStringLiteral("Saving"));
+    progress_dialog.setLabelText(QStringLiteral("Preparing save..."));
+    progress_dialog.setCancelButton(nullptr);
+    progress_dialog.setRange(0, 1000);
+    progress_dialog.setValue(0);
+    progress_dialog.setMinimumDuration(0);
+    progress_dialog.setWindowModality(Qt::ApplicationModal);
+    progress_dialog.setMinimumWidth(460);
+    progress_dialog.setMaximumWidth(460);
+
+    auto format_bytes = [](qint64 bytes) -> QString {
+        static const char* units[] = {"B", "KB", "MB", "GB", "TB"};
+        double value = static_cast<double>(bytes);
+        int unit = 0;
+        while (value >= 1024.0 && unit < 4) {
+            value /= 1024.0;
+            ++unit;
+        }
+        return QStringLiteral("%1 %2").arg(unit == 0 ? QString::number(static_cast<qint64>(value)) : QString::number(value, 'f', 1)).arg(QString::fromLatin1(units[unit]));
+    };
+    auto format_duration = [](qint64 seconds) -> QString {
+        if (seconds < 60) {
+            return QStringLiteral("%1s").arg(seconds);
+        }
+        if (seconds < 3600) {
+            return QStringLiteral("%1m %2s").arg(seconds / 60).arg(seconds % 60);
+        }
+        return QStringLiteral("%1h %2m").arg(seconds / 3600).arg((seconds % 3600) / 60);
+    };
+
+    QElapsedTimer timer;
+    timer.start();
+    QElapsedTimer ui_timer;
+    ui_timer.start();
+    qint64 last_ui_completed = -1;
+    const auto progress_callback = [&](qint64 completed, qint64 total, const QString& phase) -> bool {
+        constexpr qint64 kUiUpdateBytes = 16LL * 1024 * 1024;
+        constexpr qint64 kUiUpdateMs = 120;
+        const bool force_update = completed <= 0 || completed >= total;
+        if (!force_update && last_ui_completed >= 0 &&
+            (completed - last_ui_completed) < kUiUpdateBytes &&
+            ui_timer.elapsed() < kUiUpdateMs) {
+            return true;
+        }
+
+        last_ui_completed = completed;
+        ui_timer.restart();
+        const int value = total > 0 ? static_cast<int>((completed * 1000) / total) : 0;
+        progress_dialog.setValue(qBound(0, value, 1000));
+
+        QString label = QStringLiteral("%1 %2 of %3").arg(phase).arg(format_bytes(completed)).arg(format_bytes(total));
+        if (completed > 0 && total > completed) {
+            const qint64 elapsed_ms = timer.elapsed();
+            const double bytes_per_ms = static_cast<double>(completed) / qMax<qint64>(1, elapsed_ms);
+            if (bytes_per_ms > 0.0) {
+                const qint64 remaining_seconds = static_cast<qint64>((total - completed) / bytes_per_ms / 1000.0);
+                label += QStringLiteral("\nEstimated time left: %1").arg(format_duration(qMax<qint64>(0, remaining_seconds)));
+            }
+        }
+        progress_dialog.setLabelText(label);
+        statusBar()->showMessage(label.replace(QLatin1Char('\n'), QLatin1Char(' ')));
+        QApplication::processEvents(QEventLoop::AllEvents, 50);
+        return true;
+    };
+
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    progress_dialog.show();
+    QApplication::processEvents();
     const QString backup_source_path = save_as ? target_path : hex_view_->document_path();
-    if (!prepare_backup_for_save(backup_source_path)) {
+    if (!prepare_backup_for_save(backup_source_path, progress_callback)) {
+        QApplication::restoreOverrideCursor();
         return false;
     }
-
-    statusBar()->showMessage(QStringLiteral("Saving..."));
-    QApplication::setOverrideCursor(Qt::WaitCursor);
-    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
-    const bool saved = save_as ? hex_view_->save_as(target_path) : hex_view_->save();
+    const bool saved = save_as
+        ? hex_view_->save_as_with_progress(target_path, [&](qint64 completed, qint64 total) {
+            return progress_callback(completed, total, QStringLiteral("Saving"));
+        })
+        : hex_view_->save_with_progress([&](qint64 completed, qint64 total) {
+            return progress_callback(completed, total, QStringLiteral("Saving"));
+        });
+    progress_dialog.setValue(1000);
     QApplication::restoreOverrideCursor();
     if (!saved) {
         statusBar()->showMessage(save_as ? QStringLiteral("Save As failed.") : QStringLiteral("Save failed."), 4000);
@@ -931,18 +1123,11 @@ void MainWindow::setup_docks() {
     update_bookmarks_view();
 
     search_results_dock_ = new QDockWidget("Search Results", this);
-    search_results_tree_ = new QTreeWidget(search_results_dock_);
-    search_results_tree_->setRootIsDecorated(false);
-    search_results_tree_->setAlternatingRowColors(true);
-    search_results_tree_->setUniformRowHeights(true);
-    search_results_tree_->setColumnCount(3);
-    search_results_tree_->setHeaderLabels({QStringLiteral("Offset"), QStringLiteral("Match"), QStringLiteral("Preview")});
-    search_results_tree_->header()->setStretchLastSection(true);
-    search_results_tree_->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
-    search_results_tree_->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
-    connect(search_results_tree_, &QTreeWidget::itemActivated, this, [this](QTreeWidgetItem*, int) { activate_search_result_item(); });
-    connect(search_results_tree_, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem*, int) { activate_search_result_item(); });
-    search_results_dock_->setWidget(search_results_tree_);
+    search_results_tabs_ = new QTabWidget(search_results_dock_);
+    search_results_tabs_->setTabsClosable(true);
+    search_results_tabs_->setDocumentMode(true);
+    connect(search_results_tabs_, &QTabWidget::tabCloseRequested, this, &MainWindow::close_search_results_tab);
+    search_results_dock_->setWidget(search_results_tabs_);
     search_results_dock_->setAllowedAreas(Qt::BottomDockWidgetArea | Qt::TopDockWidgetArea);
     addDockWidget(Qt::BottomDockWidgetArea, search_results_dock_);
     show_search_summary(QStringLiteral("No active search."));
@@ -1343,9 +1528,14 @@ bool MainWindow::prompt_for_search_pattern(
     auto* pattern_form = new QFormLayout(pattern_group);
     root->addWidget(pattern_group);
 
-    auto* text_input = new QLineEdit(pattern_group);
-    text_input->setClearButtonEnabled(true);
-    text_input->setText(last_search_display_text_);
+    auto* text_input = new QComboBox(pattern_group);
+    text_input->setEditable(true);
+    text_input->setInsertPolicy(QComboBox::NoInsert);
+    text_input->addItems(search_history_);
+    text_input->setCurrentText(last_search_display_text_);
+    if (text_input->lineEdit() != nullptr) {
+        text_input->lineEdit()->setClearButtonEnabled(true);
+    }
 
     auto* mode_combo = new QComboBox(pattern_group);
     mode_combo->addItem(QStringLiteral("Text"), static_cast<int>(SearchInputMode::Text));
@@ -1409,14 +1599,14 @@ bool MainWindow::prompt_for_search_pattern(
         action_combo = new QComboBox(options_group);
         action_combo->addItem(QStringLiteral("Find Next"), static_cast<int>(SearchExecution::FindNext));
         action_combo->addItem(QStringLiteral("Find All"), static_cast<int>(SearchExecution::FindAll));
-        action_combo->setCurrentIndex(action_combo->findData(static_cast<int>(*execution)));
+        action_combo->setCurrentIndex(action_combo->findData(static_cast<int>(last_search_execution_)));
         options_form->addRow(QStringLiteral("Action"), action_combo);
     }
 
     QCheckBox* selection_only_check = nullptr;
     if (selection_only != nullptr && hex_view_ != nullptr && hex_view_->has_selection()) {
         selection_only_check = new QCheckBox(QStringLiteral("Search in selection only"), options_group);
-        selection_only_check->setChecked(default_selection_only);
+        selection_only_check->setChecked(default_selection_only || last_search_selection_only_);
         options_form->addRow(QString(), selection_only_check);
     }
     if (action_combo == nullptr && selection_only_check == nullptr) {
@@ -1449,7 +1639,7 @@ bool MainWindow::prompt_for_search_pattern(
         return false;
     }
 
-    const QString input = text_input->text().trimmed();
+    const QString input = text_input->currentText().trimmed();
     if (input.isEmpty()) {
         return false;
     }
@@ -1479,11 +1669,14 @@ bool MainWindow::prompt_for_search_pattern(
 
     pattern = parsed;
     last_search_display_text_ = input;
+    add_search_history(input);
     if (execution != nullptr && action_combo != nullptr) {
         *execution = static_cast<SearchExecution>(action_combo->currentData().toInt());
+        last_search_execution_ = *execution;
     }
     if (selection_only != nullptr) {
         *selection_only = selection_only_check != nullptr && selection_only_check->isChecked();
+        last_search_selection_only_ = *selection_only;
     }
     if (display_text != nullptr) {
         *display_text = input;
@@ -1867,32 +2060,170 @@ void MainWindow::replace() {
     last_search_hex_mode_ = hex_mode;
 
     if (execution == SearchExecution::FindAll) {
-        const qint64 replaced = hex_view_->replace_all(before, after, selection_only);
+        QProgressDialog progress_dialog(this);
+        progress_dialog.setWindowTitle(QStringLiteral("Replace All"));
+        progress_dialog.setLabelText(QStringLiteral("Replacing..."));
+        progress_dialog.setCancelButtonText(QStringLiteral("Cancel"));
+        progress_dialog.setRange(0, 1000);
+        progress_dialog.setValue(0);
+        progress_dialog.setMinimumDuration(0);
+        progress_dialog.setWindowModality(Qt::ApplicationModal);
+        progress_dialog.setMinimumWidth(460);
+        progress_dialog.setMaximumWidth(460);
+
+        auto format_bytes = [](qint64 bytes) -> QString {
+            static const char* units[] = {"B", "KB", "MB", "GB", "TB"};
+            double value = static_cast<double>(bytes);
+            int unit = 0;
+            while (value >= 1024.0 && unit < 4) {
+                value /= 1024.0;
+                ++unit;
+            }
+            return QStringLiteral("%1 %2").arg(unit == 0 ? QString::number(static_cast<qint64>(value)) : QString::number(value, 'f', 1)).arg(QString::fromLatin1(units[unit]));
+        };
+
+        QElapsedTimer ui_timer;
+        ui_timer.start();
+        qint64 last_ui_completed = -1;
+        bool canceled = false;
+        const auto progress_callback = [&](qint64 completed, qint64 total) -> bool {
+            constexpr qint64 kUiUpdateBytes = 16LL * 1024 * 1024;
+            constexpr qint64 kUiUpdateMs = 120;
+            const bool force_update = completed <= 0 || completed >= total;
+            if (!force_update && last_ui_completed >= 0 &&
+                (completed - last_ui_completed) < kUiUpdateBytes &&
+                ui_timer.elapsed() < kUiUpdateMs) {
+                return true;
+            }
+
+            last_ui_completed = completed;
+            ui_timer.restart();
+            progress_dialog.setValue(total > 0 ? qBound(0, static_cast<int>((completed * 1000) / total), 1000) : 0);
+            const QString label = total > 0
+                ? QStringLiteral("Replacing... scanned %1 of %2").arg(format_bytes(completed)).arg(format_bytes(total))
+                : QStringLiteral("Replacing...");
+            progress_dialog.setLabelText(label);
+            statusBar()->showMessage(label);
+            QApplication::processEvents(QEventLoop::AllEvents, 50);
+            if (progress_dialog.wasCanceled()) {
+                canceled = true;
+                return false;
+            }
+            return true;
+        };
+
+        QApplication::setOverrideCursor(Qt::WaitCursor);
+        progress_dialog.show();
+        QApplication::processEvents(QEventLoop::AllEvents, 50);
+        bool replace_canceled = false;
+        QVector<qint64> replaced_offsets;
+        const qint64 replaced = hex_view_->replace_all(before, after, selection_only, &replaced_offsets, &replace_canceled, progress_callback);
+        progress_dialog.setValue(1000);
+        QApplication::restoreOverrideCursor();
+        if (canceled || replace_canceled) {
+            if (replaced > 0) {
+                show_search_matches(
+                    QStringLiteral("Replaced %1 occurrence(s) before canceling%2.")
+                        .arg(replaced)
+                        .arg(selection_only ? QStringLiteral(" in the current selection") : QString()),
+                    replaced_offsets,
+                    QStringLiteral("Replace"));
+                statusBar()->showMessage(QStringLiteral("Replace canceled after %1 occurrence(s).").arg(replaced), 3000);
+            } else {
+                statusBar()->showMessage(QStringLiteral("Replace canceled."), 2500);
+            }
+            return;
+        }
         if (replaced <= 0) {
             statusBar()->showMessage(QStringLiteral("No matches replaced."), 2500);
             return;
         }
 
-        show_search_summary(
+        show_search_matches(
             QStringLiteral("Replaced %1 occurrence(s)%2.")
                 .arg(replaced)
-                .arg(selection_only ? QStringLiteral(" in the current selection") : QString()));
+                .arg(selection_only ? QStringLiteral(" in the current selection") : QString()),
+            replaced_offsets,
+            QStringLiteral("Replace"));
         statusBar()->showMessage(QStringLiteral("Replaced %1 occurrence(s).").arg(replaced), 3000);
         return;
     }
 
+    QProgressDialog progress_dialog(this);
+    progress_dialog.setWindowTitle(QStringLiteral("Replace"));
+    progress_dialog.setLabelText(QStringLiteral("Searching for next match..."));
+    progress_dialog.setCancelButtonText(QStringLiteral("Cancel"));
+    progress_dialog.setRange(0, 1000);
+    progress_dialog.setValue(0);
+    progress_dialog.setMinimumDuration(0);
+    progress_dialog.setWindowModality(Qt::ApplicationModal);
+    progress_dialog.setMinimumWidth(460);
+    progress_dialog.setMaximumWidth(460);
+
+    auto format_bytes = [](qint64 bytes) -> QString {
+        static const char* units[] = {"B", "KB", "MB", "GB", "TB"};
+        double value = static_cast<double>(bytes);
+        int unit = 0;
+        while (value >= 1024.0 && unit < 4) {
+            value /= 1024.0;
+            ++unit;
+        }
+        return QStringLiteral("%1 %2").arg(unit == 0 ? QString::number(static_cast<qint64>(value)) : QString::number(value, 'f', 1)).arg(QString::fromLatin1(units[unit]));
+    };
+    QElapsedTimer ui_timer;
+    ui_timer.start();
+    qint64 last_ui_completed = -1;
+    bool canceled = false;
+    const auto progress_callback = [&](qint64 completed, qint64 total) -> bool {
+        constexpr qint64 kUiUpdateBytes = 16LL * 1024 * 1024;
+        constexpr qint64 kUiUpdateMs = 120;
+        const bool force_update = completed <= 0 || completed >= total;
+        if (!force_update && last_ui_completed >= 0 &&
+            (completed - last_ui_completed) < kUiUpdateBytes &&
+            ui_timer.elapsed() < kUiUpdateMs) {
+            return true;
+        }
+        last_ui_completed = completed;
+        ui_timer.restart();
+        progress_dialog.setValue(total > 0 ? qBound(0, static_cast<int>((completed * 1000) / total), 1000) : 0);
+        const QString label = total > 0
+            ? QStringLiteral("Searching for next match... %1 of %2").arg(format_bytes(completed)).arg(format_bytes(total))
+            : QStringLiteral("Searching for next match...");
+        progress_dialog.setLabelText(label);
+        statusBar()->showMessage(label);
+        QApplication::processEvents(QEventLoop::AllEvents, 50);
+        if (progress_dialog.wasCanceled()) {
+            canceled = true;
+            return false;
+        }
+        return true;
+    };
+
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    progress_dialog.show();
+    QApplication::processEvents(QEventLoop::AllEvents, 50);
     qint64 found_offset = -1;
+    bool search_canceled = false;
     const bool found = selection_only
-        ? hex_view_->find_pattern_in_selection(before, true, true, &found_offset)
-        : hex_view_->find_pattern(before, true, true, &found_offset);
+        ? hex_view_->find_pattern_in_selection(before, true, true, &found_offset, &search_canceled, progress_callback)
+        : hex_view_->find_pattern(before, true, true, &found_offset, &search_canceled, progress_callback);
     if (!found) {
         const bool fallback_found = selection_only
-            ? hex_view_->find_pattern_in_selection(before, true, false, &found_offset)
-            : hex_view_->find_pattern(before, true, false, &found_offset);
+            ? hex_view_->find_pattern_in_selection(before, true, false, &found_offset, &search_canceled, progress_callback)
+            : hex_view_->find_pattern(before, true, false, &found_offset, &search_canceled, progress_callback);
+        progress_dialog.setValue(1000);
+        QApplication::restoreOverrideCursor();
+        if (canceled || search_canceled) {
+            statusBar()->showMessage(QStringLiteral("Replace canceled."), 2500);
+            return;
+        }
         if (!fallback_found) {
             statusBar()->showMessage(QStringLiteral("No match available to replace."), 3000);
             return;
         }
+    } else {
+        progress_dialog.setValue(1000);
+        QApplication::restoreOverrideCursor();
     }
 
     if (!hex_view_->replace_range(found_offset, before, after)) {
@@ -1900,11 +2231,13 @@ void MainWindow::replace() {
         return;
     }
 
-    show_search_summary(
+    show_search_matches(
         QStringLiteral("Replaced %1 bytes at 0x%2")
             .arg(after.size())
             .arg(found_offset, 8, 16, QChar(u'0'))
-            .toUpper());
+            .toUpper(),
+        QVector<qint64>{found_offset},
+        QStringLiteral("Replace"));
     statusBar()->showMessage(QStringLiteral("Replaced match at 0x%1").arg(found_offset, 0, 16), 2500);
 }
 
@@ -2269,27 +2602,66 @@ void MainWindow::copy_current_tree_value(QTreeWidget* tree) {
     statusBar()->showMessage(QStringLiteral("Copied value to clipboard."), 2000);
 }
 
-void MainWindow::show_search_summary(const QString& summary) {
-    if (search_results_tree_ == nullptr) {
+void MainWindow::close_search_results_tab(int index) {
+    if (search_results_tabs_ == nullptr || index < 0 || index >= search_results_tabs_->count()) {
         return;
     }
 
-    search_results_tree_->clear();
-    auto* item = new QTreeWidgetItem(search_results_tree_, QStringList{QStringLiteral("Summary"), summary, QString()});
-    item->setFirstColumnSpanned(false);
+    QWidget* page = search_results_tabs_->widget(index);
+    search_results_tabs_->removeTab(index);
+    delete page;
+    if (search_results_tabs_->count() == 0) {
+        show_search_summary(QStringLiteral("No active search."), QStringLiteral("Summary"));
+    }
 }
 
-void MainWindow::show_search_matches(const QString& summary, const QVector<qint64>& matches) {
-    if (search_results_tree_ == nullptr) {
+void MainWindow::show_search_summary(const QString& summary, const QString& tab_title) {
+    if (search_results_tabs_ == nullptr) {
         return;
     }
 
-    search_results_tree_->clear();
-    auto* summary_item = new QTreeWidgetItem(search_results_tree_, QStringList{QStringLiteral("Summary"), summary, QString()});
+    auto* tree = new QTreeWidget(search_results_tabs_);
+    tree->setRootIsDecorated(false);
+    tree->setAlternatingRowColors(true);
+    tree->setUniformRowHeights(true);
+    tree->setColumnCount(3);
+    tree->setHeaderLabels({QStringLiteral("Offset"), QStringLiteral("Match"), QStringLiteral("Preview")});
+    tree->header()->setStretchLastSection(true);
+    tree->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    tree->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    connect(tree, &QTreeWidget::itemActivated, this, [this](QTreeWidgetItem*, int) { activate_search_result_item(); });
+    connect(tree, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem*, int) { activate_search_result_item(); });
+
+    auto* item = new QTreeWidgetItem(tree, QStringList{QStringLiteral("Summary"), summary, QString()});
+    item->setFirstColumnSpanned(false);
+
+    const QString title = tab_title.isEmpty() ? QStringLiteral("Search %1").arg(++search_results_counter_) : tab_title;
+    const int index = search_results_tabs_->addTab(tree, title);
+    search_results_tabs_->setCurrentIndex(index);
+}
+
+void MainWindow::show_search_matches(const QString& summary, const QVector<qint64>& matches, const QString& tab_title) {
+    if (search_results_tabs_ == nullptr) {
+        return;
+    }
+
+    auto* tree = new QTreeWidget(search_results_tabs_);
+    tree->setRootIsDecorated(false);
+    tree->setAlternatingRowColors(true);
+    tree->setUniformRowHeights(true);
+    tree->setColumnCount(3);
+    tree->setHeaderLabels({QStringLiteral("Offset"), QStringLiteral("Match"), QStringLiteral("Preview")});
+    tree->header()->setStretchLastSection(true);
+    tree->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    tree->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    connect(tree, &QTreeWidget::itemActivated, this, [this](QTreeWidgetItem*, int) { activate_search_result_item(); });
+    connect(tree, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem*, int) { activate_search_result_item(); });
+
+    auto* summary_item = new QTreeWidgetItem(tree, QStringList{QStringLiteral("Summary"), summary, QString()});
     summary_item->setFirstColumnSpanned(false);
 
     auto* results_root = new QTreeWidgetItem(
-        search_results_tree_,
+        tree,
         QStringList{QStringLiteral("Results"), QStringLiteral("%1 match(es)").arg(matches.size()), QString()});
     results_root->setExpanded(true);
 
@@ -2326,15 +2698,23 @@ void MainWindow::show_search_matches(const QString& summary, const QVector<qint6
                 QString()});
     }
 
-    search_results_tree_->expandAll();
+    tree->expandAll();
+    const QString title = tab_title.isEmpty() ? QStringLiteral("Search %1").arg(++search_results_counter_) : tab_title;
+    const int index = search_results_tabs_->addTab(tree, title);
+    search_results_tabs_->setCurrentIndex(index);
 }
 
 void MainWindow::activate_search_result_item() {
-    if (search_results_tree_ == nullptr || hex_view_ == nullptr || !hex_view_->has_document()) {
+    if (search_results_tabs_ == nullptr || hex_view_ == nullptr || !hex_view_->has_document()) {
         return;
     }
 
-    QTreeWidgetItem* item = search_results_tree_->currentItem();
+    auto* tree = qobject_cast<QTreeWidget*>(search_results_tabs_->currentWidget());
+    if (tree == nullptr) {
+        return;
+    }
+
+    QTreeWidgetItem* item = tree->currentItem();
     if (item == nullptr) {
         return;
     }
@@ -2374,7 +2754,8 @@ bool MainWindow::prompt_for_replace_operation(
                                   SearchTextEncoding initial_encoding,
                                   NumericSearchType initial_numeric_type,
                                   SearchByteOrder initial_byte_order,
-                                  QLineEdit*& text_input,
+                                  const QStringList& history,
+                                  QComboBox*& text_input,
                                   QComboBox*& mode_combo,
                                   QComboBox*& encoding_combo,
                                   QComboBox*& numeric_type_combo,
@@ -2382,9 +2763,14 @@ bool MainWindow::prompt_for_replace_operation(
         auto* group = new QGroupBox(title, parent);
         auto* form = new QFormLayout(group);
 
-        text_input = new QLineEdit(group);
-        text_input->setClearButtonEnabled(true);
-        text_input->setText(initial_text);
+        text_input = new QComboBox(group);
+        text_input->setEditable(true);
+        text_input->setInsertPolicy(QComboBox::NoInsert);
+        text_input->addItems(history);
+        text_input->setCurrentText(initial_text);
+        if (text_input->lineEdit() != nullptr) {
+            text_input->lineEdit()->setClearButtonEnabled(true);
+        }
 
         mode_combo = new QComboBox(group);
         mode_combo->addItem(QStringLiteral("Text"), static_cast<int>(SearchInputMode::Text));
@@ -2459,7 +2845,7 @@ bool MainWindow::prompt_for_replace_operation(
         root->addWidget(group);
     };
 
-    QLineEdit* find_text_input = nullptr;
+    QComboBox* find_text_input = nullptr;
     QComboBox* find_mode_combo = nullptr;
     QComboBox* find_encoding_combo = nullptr;
     QComboBox* find_numeric_type_combo = nullptr;
@@ -2473,13 +2859,14 @@ bool MainWindow::prompt_for_replace_operation(
         last_search_text_encoding_,
         last_search_numeric_type_,
         last_search_numeric_byte_order_,
+        search_history_,
         find_text_input,
         find_mode_combo,
         find_encoding_combo,
         find_numeric_type_combo,
         find_byte_order_combo);
 
-    QLineEdit* replace_text_input = nullptr;
+    QComboBox* replace_text_input = nullptr;
     QComboBox* replace_mode_combo = nullptr;
     QComboBox* replace_encoding_combo = nullptr;
     QComboBox* replace_numeric_type_combo = nullptr;
@@ -2488,11 +2875,12 @@ bool MainWindow::prompt_for_replace_operation(
         &dialog,
         QStringLiteral("Replace With"),
         QStringLiteral("Replace with"),
-        QString(),
-        SearchInputMode::Text,
-        last_search_text_encoding_,
-        last_search_numeric_type_,
-        last_search_numeric_byte_order_,
+        last_replace_display_text_,
+        last_replace_input_mode_,
+        last_replace_text_encoding_,
+        last_replace_numeric_type_,
+        last_replace_numeric_byte_order_,
+        replace_history_,
         replace_text_input,
         replace_mode_combo,
         replace_encoding_combo,
@@ -2504,13 +2892,13 @@ bool MainWindow::prompt_for_replace_operation(
     auto* action_combo = new QComboBox(options_group);
     action_combo->addItem(QStringLiteral("Replace Next"), static_cast<int>(SearchExecution::FindNext));
     action_combo->addItem(QStringLiteral("Replace All"), static_cast<int>(SearchExecution::FindAll));
-    action_combo->setCurrentIndex(action_combo->findData(static_cast<int>(execution)));
+    action_combo->setCurrentIndex(action_combo->findData(static_cast<int>(last_replace_execution_)));
     options_form->addRow(QStringLiteral("Action"), action_combo);
 
     QCheckBox* selection_only_check = nullptr;
     if (hex_view_ != nullptr && hex_view_->has_selection()) {
         selection_only_check = new QCheckBox(QStringLiteral("Search in selection only"), options_group);
-        selection_only_check->setChecked(selection_only);
+        selection_only_check->setChecked(last_replace_selection_only_);
         options_form->addRow(QString(), selection_only_check);
     }
     root->addWidget(options_group);
@@ -2524,8 +2912,8 @@ bool MainWindow::prompt_for_replace_operation(
         return false;
     }
 
-    const QString find_text = find_text_input->text().trimmed();
-    const QString replace_text = replace_text_input->text().trimmed();
+    const QString find_text = find_text_input->currentText().trimmed();
+    const QString replace_text = replace_text_input->currentText().trimmed();
     if (find_text.isEmpty()) {
         statusBar()->showMessage(QStringLiteral("Enter a find pattern."), 3000);
         return false;
@@ -2627,6 +3015,17 @@ bool MainWindow::prompt_for_replace_operation(
     selection_only = selection_only_check != nullptr && selection_only_check->isChecked();
     last_search_input_mode_ = find_mode;
     last_search_display_text_ = find_text;
+    last_search_execution_ = execution;
+    last_search_selection_only_ = selection_only;
+    last_replace_display_text_ = replace_text;
+    last_replace_input_mode_ = replace_mode;
+    last_replace_text_encoding_ = replace_encoding;
+    last_replace_numeric_type_ = replace_numeric_type;
+    last_replace_numeric_byte_order_ = replace_byte_order;
+    last_replace_execution_ = execution;
+    last_replace_selection_only_ = selection_only;
+    add_search_history(find_text);
+    add_replace_history(replace_text);
     return true;
 }
 
@@ -2641,25 +3040,86 @@ void MainWindow::run_search(bool forward, bool from_caret, bool selection_only) 
         return;
     }
 
+    QProgressDialog progress_dialog(this);
+    progress_dialog.setWindowTitle(QStringLiteral("Search"));
+    progress_dialog.setLabelText(QStringLiteral("Searching..."));
+    progress_dialog.setCancelButtonText(QStringLiteral("Cancel"));
+    progress_dialog.setRange(0, 1000);
+    progress_dialog.setValue(0);
+    progress_dialog.setMinimumDuration(0);
+    progress_dialog.setWindowModality(Qt::ApplicationModal);
+    progress_dialog.setMinimumWidth(460);
+    progress_dialog.setMaximumWidth(460);
+
+    auto format_bytes = [](qint64 bytes) -> QString {
+        static const char* units[] = {"B", "KB", "MB", "GB", "TB"};
+        double value = static_cast<double>(bytes);
+        int unit = 0;
+        while (value >= 1024.0 && unit < 4) {
+            value /= 1024.0;
+            ++unit;
+        }
+        return QStringLiteral("%1 %2").arg(unit == 0 ? QString::number(static_cast<qint64>(value)) : QString::number(value, 'f', 1)).arg(QString::fromLatin1(units[unit]));
+    };
+
+    QElapsedTimer ui_timer;
+    ui_timer.start();
+    qint64 last_ui_completed = -1;
+    bool canceled = false;
+    const auto progress_callback = [&](qint64 completed, qint64 total) -> bool {
+        constexpr qint64 kUiUpdateBytes = 16LL * 1024 * 1024;
+        constexpr qint64 kUiUpdateMs = 120;
+        const bool force_update = completed <= 0 || completed >= total;
+        if (!force_update && last_ui_completed >= 0 &&
+            (completed - last_ui_completed) < kUiUpdateBytes &&
+            ui_timer.elapsed() < kUiUpdateMs) {
+            return true;
+        }
+
+        last_ui_completed = completed;
+        ui_timer.restart();
+        progress_dialog.setValue(total > 0 ? qBound(0, static_cast<int>((completed * 1000) / total), 1000) : 0);
+        const QString label = total > 0
+            ? QStringLiteral("Searching... %1 of %2").arg(format_bytes(completed)).arg(format_bytes(total))
+            : QStringLiteral("Searching...");
+        progress_dialog.setLabelText(label);
+        statusBar()->showMessage(label);
+        QApplication::processEvents(QEventLoop::AllEvents, 50);
+        if (progress_dialog.wasCanceled()) {
+            canceled = true;
+            return false;
+        }
+        return true;
+    };
+
     statusBar()->showMessage(QStringLiteral("Searching..."));
     QApplication::setOverrideCursor(Qt::WaitCursor);
-    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+    progress_dialog.show();
+    QApplication::processEvents(QEventLoop::AllEvents, 50);
     qint64 found_offset = -1;
+    bool search_canceled = false;
     const bool found = selection_only
-        ? hex_view_->find_pattern_in_selection(last_search_pattern_, forward, from_caret, &found_offset)
-        : hex_view_->find_pattern(last_search_pattern_, forward, from_caret, &found_offset);
+        ? hex_view_->find_pattern_in_selection(last_search_pattern_, forward, from_caret, &found_offset, &search_canceled, progress_callback)
+        : hex_view_->find_pattern(last_search_pattern_, forward, from_caret, &found_offset, &search_canceled, progress_callback);
+    progress_dialog.setValue(1000);
     QApplication::restoreOverrideCursor();
+    if (canceled || search_canceled) {
+        statusBar()->showMessage(QStringLiteral("Search canceled."), 2500);
+        return;
+    }
     if (!found) {
         show_search_summary(
             QStringLiteral("No matches found%1.")
-                .arg(selection_only ? QStringLiteral(" in the current selection") : QString()));
+                .arg(selection_only ? QStringLiteral(" in the current selection") : QString()),
+            QStringLiteral("Find"));
         statusBar()->showMessage(QStringLiteral("No matches found."), 2500);
         return;
     }
 
     show_search_matches(
         QStringLiteral("1 match at 0x%1").arg(found_offset, 8, 16, QChar(u'0')).toUpper(),
-        QVector<qint64>{found_offset});
+        QVector<qint64>{found_offset},
+        QStringLiteral("Find"));
     statusBar()->showMessage(QStringLiteral("Match at 0x%1").arg(found_offset, 0, 16), 2500);
 }
 
@@ -2674,21 +3134,92 @@ void MainWindow::run_find_all(bool selection_only) {
         return;
     }
 
+    QProgressDialog progress_dialog(this);
+    progress_dialog.setWindowTitle(QStringLiteral("Find All"));
+    progress_dialog.setLabelText(QStringLiteral("Searching..."));
+    progress_dialog.setCancelButtonText(QStringLiteral("Cancel"));
+    progress_dialog.setRange(0, 1000);
+    progress_dialog.setValue(0);
+    progress_dialog.setMinimumDuration(0);
+    progress_dialog.setWindowModality(Qt::ApplicationModal);
+    progress_dialog.setMinimumWidth(460);
+    progress_dialog.setMaximumWidth(460);
+
+    auto format_bytes = [](qint64 bytes) -> QString {
+        static const char* units[] = {"B", "KB", "MB", "GB", "TB"};
+        double value = static_cast<double>(bytes);
+        int unit = 0;
+        while (value >= 1024.0 && unit < 4) {
+            value /= 1024.0;
+            ++unit;
+        }
+        return QStringLiteral("%1 %2").arg(unit == 0 ? QString::number(static_cast<qint64>(value)) : QString::number(value, 'f', 1)).arg(QString::fromLatin1(units[unit]));
+    };
+
+    QElapsedTimer ui_timer;
+    ui_timer.start();
+    qint64 last_ui_completed = -1;
+    bool canceled = false;
+    const auto progress_callback = [&](qint64 completed, qint64 total) -> bool {
+        constexpr qint64 kUiUpdateBytes = 16LL * 1024 * 1024;
+        constexpr qint64 kUiUpdateMs = 120;
+        const bool force_update = completed <= 0 || completed >= total;
+        if (!force_update && last_ui_completed >= 0 &&
+            (completed - last_ui_completed) < kUiUpdateBytes &&
+            ui_timer.elapsed() < kUiUpdateMs) {
+            return true;
+        }
+
+        last_ui_completed = completed;
+        ui_timer.restart();
+        progress_dialog.setValue(total > 0 ? qBound(0, static_cast<int>((completed * 1000) / total), 1000) : 0);
+        const QString label = total > 0
+            ? QStringLiteral("Searching... %1 of %2").arg(format_bytes(completed)).arg(format_bytes(total))
+            : QStringLiteral("Searching...");
+        progress_dialog.setLabelText(label);
+        statusBar()->showMessage(label);
+        QApplication::processEvents(QEventLoop::AllEvents, 50);
+        if (progress_dialog.wasCanceled()) {
+            canceled = true;
+            return false;
+        }
+        return true;
+    };
+
     statusBar()->showMessage(QStringLiteral("Searching..."));
     QApplication::setOverrideCursor(Qt::WaitCursor);
-    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
-    const QVector<qint64> matches = hex_view_->find_all_patterns(last_search_pattern_, selection_only);
+    progress_dialog.show();
+    QApplication::processEvents(QEventLoop::AllEvents, 50);
+    bool search_canceled = false;
+    const QVector<qint64> matches = hex_view_->find_all_patterns(last_search_pattern_, selection_only, &search_canceled, progress_callback);
+    progress_dialog.setValue(1000);
     QApplication::restoreOverrideCursor();
+    if (canceled || search_canceled) {
+        if (!matches.isEmpty()) {
+            show_search_matches(
+                QStringLiteral("%1 match(es) found before canceling%2.")
+                    .arg(matches.size())
+                    .arg(selection_only ? QStringLiteral(" in the current selection") : QString()),
+                matches,
+                QStringLiteral("Find"));
+            statusBar()->showMessage(QStringLiteral("Search canceled after %1 match(es).").arg(matches.size()), 3000);
+        } else {
+            statusBar()->showMessage(QStringLiteral("Search canceled."), 2500);
+        }
+        return;
+    }
     if (matches.isEmpty()) {
         show_search_summary(
             QStringLiteral("No matches found%1.")
-                .arg(selection_only ? QStringLiteral(" in the current selection") : QString()));
+                .arg(selection_only ? QStringLiteral(" in the current selection") : QString()),
+            QStringLiteral("Find"));
     } else {
         show_search_matches(
             QStringLiteral("%1 match(es)%2.")
                 .arg(matches.size())
                 .arg(selection_only ? QStringLiteral(" in the current selection") : QString()),
-            matches);
+            matches,
+            QStringLiteral("Find"));
     }
     if (search_results_dock_ != nullptr) {
         search_results_dock_->raise();
