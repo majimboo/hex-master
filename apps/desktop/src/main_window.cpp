@@ -46,6 +46,7 @@
 #include <QStyleOptionButton>
 #include <QTabWidget>
 #include <QTextBlock>
+#include <QTextStream>
 #include <QTextEdit>
 #include <QTreeWidget>
 #include <QHeaderView>
@@ -455,6 +456,7 @@ public:
         save_action->setShortcut(QKeySequence::Save);
         auto* save_as_action = file_menu->addAction(QStringLiteral("Save &As..."));
         save_as_action->setShortcut(QKeySequence::SaveAs);
+        auto* export_action = file_menu->addAction(QStringLiteral("&Export Parsed Structure..."));
         file_menu->addSeparator();
         auto* close_action = file_menu->addAction(QStringLiteral("&Close"));
         close_action->setShortcut(QKeySequence::Close);
@@ -527,6 +529,7 @@ public:
         connect(open_action, &QAction::triggered, this, [this]() { open_schema(); });
         connect(save_action, &QAction::triggered, this, [this]() { save_schema(); });
         connect(save_as_action, &QAction::triggered, this, [this]() { save_schema_as(); });
+        connect(export_action, &QAction::triggered, this, [this]() { export_parsed_structure(); });
         connect(close_action, &QAction::triggered, this, &QDialog::close);
         connect(syntax_guide_action, &QAction::triggered, this, [this]() {
             if (!QDesktopServices::openUrl(QUrl(QStringLiteral("https://majimboo.github.io/hex-master/schema-guide.html")))) {
@@ -819,6 +822,73 @@ private:
         save_schema_to(path);
     }
 
+    void export_parsed_structure() {
+        if (!has_parsed_root_) {
+            set_status(QStringLiteral("Run a schema before exporting the parsed structure."), true);
+            return;
+        }
+
+        const QString suggested_name = current_path_.isEmpty()
+            ? QStringLiteral("structure.json")
+            : QStringLiteral("%1.json").arg(QFileInfo(current_path_).completeBaseName());
+        const QString path = QFileDialog::getSaveFileName(
+            this,
+            QStringLiteral("Export Parsed Structure"),
+            suggested_name,
+            QStringLiteral("JSON Files (*.json);;All Files (*)"));
+        if (path.isEmpty()) {
+            return;
+        }
+
+        QFile file(path);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+            set_status(QStringLiteral("Failed to export the parsed structure."), true);
+            return;
+        }
+
+        const int total_nodes = count_parsed_nodes(parsed_root_);
+        int visited_nodes = 0;
+        bool canceled = false;
+
+        QProgressDialog progress_dialog(QStringLiteral("Exporting parsed structure..."), QStringLiteral("Cancel"), 0, 1000, this);
+        progress_dialog.setWindowTitle(QStringLiteral("Export Structure"));
+        progress_dialog.setWindowModality(Qt::WindowModal);
+        progress_dialog.setMinimumDuration(0);
+        progress_dialog.setAutoClose(false);
+        progress_dialog.setAutoReset(false);
+        progress_dialog.setMinimumWidth(480);
+        progress_dialog.setValue(0);
+
+        QElapsedTimer progress_timer;
+        progress_timer.start();
+
+        QTextStream stream(&file);
+        stream.setEncoding(QStringConverter::Utf8);
+        stream << "{\n";
+        stream << "  \"schemaTitle\": " << json_string_literal(current_schema_title()) << ",\n";
+        stream << "  \"exportedAt\": " << json_string_literal(QDateTime::currentDateTimeUtc().toString(Qt::ISODate)) << ",\n";
+        stream << "  \"baseOffset\": " << json_string_literal(base_offset_edit_->text().trimmed().isEmpty() ? QStringLiteral("0x0") : base_offset_edit_->text().trimmed()) << ",\n";
+        stream << "  \"root\": ";
+        write_node_json(stream, parsed_root_, 1, total_nodes, &visited_nodes, &progress_dialog, &progress_timer, &canceled);
+        stream << "\n}\n";
+        stream.flush();
+
+        if (canceled) {
+            file.close();
+            file.remove();
+            set_status(QStringLiteral("Structure export canceled."), true);
+            return;
+        }
+
+        if (stream.status() != QTextStream::Ok || file.error() != QFile::NoError) {
+            set_status(QStringLiteral("Failed to export the parsed structure."), true);
+            return;
+        }
+
+        progress_dialog.setValue(1000);
+        set_status(QStringLiteral("Exported parsed structure to %1").arg(QFileInfo(path).fileName()));
+    }
+
     static bool is_indexed_array_node(const StructureSchema::ParsedNode& node) {
         if (node.children.isEmpty()) {
             return false;
@@ -829,6 +899,133 @@ private:
             }
         }
         return true;
+    }
+
+    static int count_parsed_nodes(const StructureSchema::ParsedNode& node) {
+        int total = 1;
+        for (const auto& child : node.children) {
+            total += count_parsed_nodes(child);
+        }
+        return total;
+    }
+
+    static QString json_string_literal(const QString& value) {
+        QString escaped;
+        escaped.reserve(value.size() + 8);
+        escaped += QLatin1Char('"');
+        for (const QChar ch : value) {
+            switch (ch.unicode()) {
+            case '\"':
+                escaped += QStringLiteral("\\\"");
+                break;
+            case '\\':
+                escaped += QStringLiteral("\\\\");
+                break;
+            case '\b':
+                escaped += QStringLiteral("\\b");
+                break;
+            case '\f':
+                escaped += QStringLiteral("\\f");
+                break;
+            case '\n':
+                escaped += QStringLiteral("\\n");
+                break;
+            case '\r':
+                escaped += QStringLiteral("\\r");
+                break;
+            case '\t':
+                escaped += QStringLiteral("\\t");
+                break;
+            default:
+                if (ch.unicode() < 0x20) {
+                    escaped += QStringLiteral("\\u%1").arg(static_cast<int>(ch.unicode()), 4, 16, QChar(u'0'));
+                } else {
+                    escaped += ch;
+                }
+                break;
+            }
+        }
+        escaped += QLatin1Char('"');
+        return escaped;
+    }
+
+    static void write_indent(QTextStream& stream, int indent_level) {
+        for (int i = 0; i < indent_level; ++i) {
+            stream << QStringLiteral("  ");
+        }
+    }
+
+    static void write_node_json(
+        QTextStream& stream,
+        const StructureSchema::ParsedNode& node,
+        int indent_level,
+        int total_nodes,
+        int* visited_nodes,
+        QProgressDialog* progress_dialog,
+        QElapsedTimer* progress_timer,
+        bool* canceled) {
+        if (canceled != nullptr && *canceled) {
+            return;
+        }
+
+        if (visited_nodes != nullptr) {
+            ++(*visited_nodes);
+        }
+
+        if (progress_dialog != nullptr && progress_timer != nullptr && visited_nodes != nullptr) {
+            if (progress_timer->elapsed() >= 50 || *visited_nodes >= total_nodes) {
+                progress_timer->restart();
+                progress_dialog->setValue(total_nodes > 0 ? static_cast<int>((static_cast<qint64>(*visited_nodes) * 1000) / total_nodes) : 1000);
+                progress_dialog->setLabelText(QStringLiteral("Exporting parsed structure...\n%1 of %2 nodes")
+                                                  .arg(*visited_nodes)
+                                                  .arg(total_nodes));
+                QApplication::processEvents();
+                if (progress_dialog->wasCanceled() && canceled != nullptr) {
+                    *canceled = true;
+                    return;
+                }
+            }
+        }
+
+        stream << "{\n";
+        write_indent(stream, indent_level + 1);
+        stream << "\"name\": " << json_string_literal(node.name) << ",\n";
+        write_indent(stream, indent_level + 1);
+        stream << "\"type\": " << json_string_literal(node.type_name) << ",\n";
+        write_indent(stream, indent_level + 1);
+        stream << "\"value\": " << json_string_literal(node.value) << ",\n";
+        write_indent(stream, indent_level + 1);
+        stream << "\"offset\": " << json_string_literal(QStringLiteral("0x%1").arg(node.offset, 0, 16).toUpper()) << ",\n";
+        write_indent(stream, indent_level + 1);
+        stream << "\"offsetDecimal\": " << json_string_literal(QString::number(node.offset)) << ",\n";
+        write_indent(stream, indent_level + 1);
+        stream << "\"size\": " << json_string_literal(QString::number(node.size));
+
+        if (!node.children.isEmpty()) {
+            stream << ",\n";
+            write_indent(stream, indent_level + 1);
+            stream << "\"children\": [\n";
+            for (int index = 0; index < node.children.size(); ++index) {
+                write_indent(stream, indent_level + 2);
+                write_node_json(stream, node.children.at(index), indent_level + 2, total_nodes, visited_nodes, progress_dialog, progress_timer, canceled);
+                if (canceled != nullptr && *canceled) {
+                    return;
+                }
+                if (index + 1 < node.children.size()) {
+                    stream << ",";
+                }
+                stream << "\n";
+            }
+            write_indent(stream, indent_level + 1);
+            stream << "]\n";
+            write_indent(stream, indent_level);
+            stream << "}";
+            return;
+        }
+
+        stream << "\n";
+        write_indent(stream, indent_level);
+        stream << "}";
     }
 
     static QVariant node_ptr_variant(const StructureSchema::ParsedNode* node) {
@@ -2052,6 +2249,40 @@ MainWindow::SaveBackupPolicy MainWindow::save_backup_policy() const {
     return static_cast<SaveBackupPolicy>(settings.value(QStringLiteral("settings/saveBackupPolicy"), static_cast<int>(SaveBackupPolicy::Ask)).toInt());
 }
 
+MainWindow::SaveBackupMode MainWindow::save_backup_mode() const {
+    QSettings settings;
+    return static_cast<SaveBackupMode>(settings.value(QStringLiteral("settings/saveBackupMode"), static_cast<int>(SaveBackupMode::Progress)).toInt());
+}
+
+bool MainWindow::resolve_backup_policy_for_save(const QString& path, SaveBackupPolicy* policy) {
+    if (policy == nullptr) {
+        return false;
+    }
+
+    const QFileInfo info(path);
+    if (path.isEmpty() || !info.exists()) {
+        *policy = SaveBackupPolicy::Never;
+        return true;
+    }
+
+    SaveBackupPolicy resolved = save_backup_policy();
+    if (resolved == SaveBackupPolicy::Ask) {
+        const auto response = QMessageBox::question(
+            this,
+            QStringLiteral("Create Backup"),
+            QStringLiteral("Create a backup copy before saving?"),
+            QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel,
+            QMessageBox::Yes);
+        if (response == QMessageBox::Cancel) {
+            return false;
+        }
+        resolved = response == QMessageBox::Yes ? SaveBackupPolicy::Always : SaveBackupPolicy::Never;
+    }
+
+    *policy = resolved;
+    return true;
+}
+
 bool MainWindow::confirm_explicit_save(const QString& title) const {
     const auto response = QMessageBox::question(
         const_cast<MainWindow*>(this),
@@ -2115,24 +2346,10 @@ QString MainWindow::backup_path_for(const QString& path) {
     return info.path() + QDir::separator() + info.completeBaseName() + QStringLiteral(".") + info.suffix() + QStringLiteral(".bak");
 }
 
-bool MainWindow::prepare_backup_for_save(const QString& path, const std::function<bool(qint64, qint64, const QString&)>& progress_callback) {
+bool MainWindow::prepare_backup_for_save(const QString& path, SaveBackupPolicy policy, const std::function<bool(qint64, qint64, const QString&)>& progress_callback) {
     const QFileInfo info(path);
     if (path.isEmpty() || !info.exists()) {
         return true;
-    }
-
-    SaveBackupPolicy policy = save_backup_policy();
-    if (policy == SaveBackupPolicy::Ask) {
-        const auto response = QMessageBox::question(
-            this,
-            QStringLiteral("Create Backup"),
-            QStringLiteral("Create a backup copy before saving?"),
-            QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel,
-            QMessageBox::Yes);
-        if (response == QMessageBox::Cancel) {
-            return false;
-        }
-        policy = response == QMessageBox::Yes ? SaveBackupPolicy::Always : SaveBackupPolicy::Never;
     }
 
     if (policy == SaveBackupPolicy::Never) {
@@ -2149,9 +2366,16 @@ bool MainWindow::prepare_backup_for_save(const QString& path, const std::functio
         return false;
     }
 
-    if (!copy_file_with_progress(path, backup_path, progress_callback)) {
-        QMessageBox::warning(this, QStringLiteral("Backup Failed"), QStringLiteral("Could not create a backup copy before saving."));
-        return false;
+    if (save_backup_mode() == SaveBackupMode::Fast) {
+        if (!QFile::copy(path, backup_path)) {
+            QMessageBox::warning(this, QStringLiteral("Backup Failed"), QStringLiteral("Could not create a backup copy before saving."));
+            return false;
+        }
+    } else {
+        if (!copy_file_with_progress(path, backup_path, progress_callback)) {
+            QMessageBox::warning(this, QStringLiteral("Backup Failed"), QStringLiteral("Could not create a backup copy before saving."));
+            return false;
+        }
     }
 
     return true;
@@ -2177,10 +2401,16 @@ bool MainWindow::save_current_document(bool confirm_save, const QString* save_as
         return false;
     }
 
+    const QString backup_source_path = save_as ? target_path : hex_view_->document_path();
+    SaveBackupPolicy backup_policy = SaveBackupPolicy::Never;
+    if (!resolve_backup_policy_for_save(backup_source_path, &backup_policy)) {
+        return false;
+    }
+
     QProgressDialog progress_dialog(this);
     progress_dialog.setWindowTitle(QStringLiteral("Saving"));
     progress_dialog.setLabelText(QStringLiteral("Preparing save..."));
-    progress_dialog.setCancelButton(nullptr);
+    progress_dialog.setCancelButtonText(QStringLiteral("Cancel"));
     progress_dialog.setRange(0, 1000);
     progress_dialog.setValue(0);
     progress_dialog.setMinimumDuration(0);
@@ -2213,9 +2443,23 @@ bool MainWindow::save_current_document(bool confirm_save, const QString* save_as
     QElapsedTimer ui_timer;
     ui_timer.start();
     qint64 last_ui_completed = -1;
+    bool progress_started = false;
+    bool canceled = false;
+    const bool fast_in_place_save = !save_as && hex_view_ != nullptr && hex_view_->has_document() &&
+        !hex_view_->is_read_only() && hex_view_->document_path() == target_path &&
+        hex_view_->can_save_in_place();
     const auto progress_callback = [&](qint64 completed, qint64 total, const QString& phase) -> bool {
         constexpr qint64 kUiUpdateBytes = 16LL * 1024 * 1024;
         constexpr qint64 kUiUpdateMs = 120;
+        if (!progress_started) {
+            progress_started = true;
+            QApplication::setOverrideCursor(Qt::WaitCursor);
+            if (fast_in_place_save && phase == QStringLiteral("Saving")) {
+                progress_dialog.setCancelButton(nullptr);
+            }
+            progress_dialog.show();
+            QApplication::processEvents();
+        }
         const bool force_update = completed <= 0 || completed >= total;
         if (!force_update && last_ui_completed >= 0 &&
             (completed - last_ui_completed) < kUiUpdateBytes &&
@@ -2240,27 +2484,42 @@ bool MainWindow::save_current_document(bool confirm_save, const QString* save_as
         progress_dialog.setLabelText(label);
         statusBar()->showMessage(label.replace(QLatin1Char('\n'), QLatin1Char(' ')));
         QApplication::processEvents(QEventLoop::AllEvents, 50);
+        if (progress_dialog.wasCanceled()) {
+            canceled = true;
+            return false;
+        }
         return true;
     };
 
-    QApplication::setOverrideCursor(Qt::WaitCursor);
-    progress_dialog.show();
-    QApplication::processEvents();
-    const QString backup_source_path = save_as ? target_path : hex_view_->document_path();
-    if (!prepare_backup_for_save(backup_source_path, progress_callback)) {
-        QApplication::restoreOverrideCursor();
+    if (!prepare_backup_for_save(backup_source_path, backup_policy, progress_callback)) {
+        if (progress_started) {
+            QApplication::restoreOverrideCursor();
+        }
+        if (canceled) {
+            statusBar()->showMessage(QStringLiteral("Save canceled."), 4000);
+        }
         return false;
     }
     const bool saved = save_as
         ? hex_view_->save_as_with_progress(target_path, [&](qint64 completed, qint64 total) {
             return progress_callback(completed, total, QStringLiteral("Saving"));
         })
-        : hex_view_->save_with_progress([&](qint64 completed, qint64 total) {
-            return progress_callback(completed, total, QStringLiteral("Saving"));
-        });
-    progress_dialog.setValue(1000);
-    QApplication::restoreOverrideCursor();
+        : (hex_view_->can_save_in_place()
+            ? hex_view_->save_in_place_with_progress([&](qint64 completed, qint64 total) {
+                return progress_callback(completed, total, QStringLiteral("Saving"));
+            })
+            : hex_view_->save_with_progress([&](qint64 completed, qint64 total) {
+                return progress_callback(completed, total, QStringLiteral("Saving"));
+            }));
+    if (progress_started) {
+        progress_dialog.setValue(1000);
+        QApplication::restoreOverrideCursor();
+    }
     if (!saved) {
+        if (canceled) {
+            statusBar()->showMessage(QStringLiteral("Save canceled."), 4000);
+            return false;
+        }
         statusBar()->showMessage(save_as ? QStringLiteral("Save As failed.") : QStringLiteral("Save failed."), 4000);
         return false;
     }
@@ -2903,10 +3162,15 @@ void MainWindow::open_settings() {
     backup_policy->addItem(QStringLiteral("Always"), static_cast<int>(SaveBackupPolicy::Always));
     backup_policy->addItem(QStringLiteral("Never"), static_cast<int>(SaveBackupPolicy::Never));
     backup_policy->setCurrentIndex(backup_policy->findData(static_cast<int>(save_backup_policy())));
+    auto* backup_mode = new QComboBox(&dialog);
+    backup_mode->addItem(QStringLiteral("Progress copy"), static_cast<int>(SaveBackupMode::Progress));
+    backup_mode->addItem(QStringLiteral("Fast copy"), static_cast<int>(SaveBackupMode::Fast));
+    backup_mode->setCurrentIndex(backup_mode->findData(static_cast<int>(save_backup_mode())));
 
     layout->addRow(QStringLiteral("Bytes per row"), row_width);
     layout->addRow(QString(), restore_session);
     layout->addRow(QStringLiteral("Backup file"), backup_policy);
+    layout->addRow(QStringLiteral("Backup copy mode"), backup_mode);
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
     layout->addRow(buttons);
@@ -2920,6 +3184,7 @@ void MainWindow::open_settings() {
     set_bytes_per_row(row_width->currentData().toInt());
     settings.setValue(QStringLiteral("settings/restoreLastSession"), restore_session->isChecked());
     settings.setValue(QStringLiteral("settings/saveBackupPolicy"), backup_policy->currentData().toInt());
+    settings.setValue(QStringLiteral("settings/saveBackupMode"), backup_mode->currentData().toInt());
     statusBar()->showMessage(QStringLiteral("Settings updated."), 2500);
 }
 

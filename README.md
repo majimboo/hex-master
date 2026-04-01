@@ -20,11 +20,12 @@ It is designed as a modern desktop alternative to Hex Workshop for inspecting an
 - analysis dock with grouped checksum and digest tables
 - byte-pattern, text, and typed-value search
 - unified replace workflow for replace-next and replace-all
-- search results table with match navigation
+- tabbed search and replace result sets with match navigation
 - loads and browses large binary files efficiently, including multi-GB data sets
 - bookmarks, checksums, recent files, and session restore
 - configurable viewport layout with persisted gutters, offsets, row numbers, and bytes-per-row
-- schema editor with a custom binary structure DSL, validation, expression-based dependent arrays, and structured field inspection
+- compare tool with side-by-side binary views, diff navigation, and results
+- schema editor with a custom binary structure DSL, validation, coverage reporting, expression-based dependent arrays, and structured field inspection
 
 ## Large File Handling
 

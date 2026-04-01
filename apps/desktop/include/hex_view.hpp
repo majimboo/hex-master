@@ -84,10 +84,12 @@ public:
     void reset_view_layout();
     bool is_read_only() const;
     bool is_dirty() const;
+    bool can_save_in_place() const;
     bool save();
     bool save_as(const QString& path);
     bool save_with_progress(const std::function<bool(qint64, qint64)>& progress_callback);
     bool save_as_with_progress(const QString& path, const std::function<bool(qint64, qint64)>& progress_callback);
+    bool save_in_place_with_progress(const std::function<bool(qint64, qint64)>& progress_callback);
     bool undo();
     bool redo();
     bool has_selection() const;

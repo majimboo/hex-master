@@ -35,10 +35,15 @@ bool hm_file_document_delete_range(
     std::size_t length);
 bool hm_file_document_is_read_only(const FileDocumentHandle* handle);
 bool hm_file_document_is_dirty(const FileDocumentHandle* handle);
+bool hm_file_document_can_save_in_place(const FileDocumentHandle* handle);
 bool hm_file_document_save(FileDocumentHandle* handle, const char* path);
 bool hm_file_document_save_with_progress(
     FileDocumentHandle* handle,
     const char* path,
+    HmSaveProgressCallback progress_callback,
+    void* user_data);
+bool hm_file_document_save_in_place_with_progress(
+    FileDocumentHandle* handle,
     HmSaveProgressCallback progress_callback,
     void* user_data);
 bool hm_file_document_undo(FileDocumentHandle* handle);

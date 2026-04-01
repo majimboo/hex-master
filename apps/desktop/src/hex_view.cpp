@@ -194,6 +194,10 @@ bool HexView::is_dirty() const {
     return source_.is_dirty();
 }
 
+bool HexView::can_save_in_place() const {
+    return source_.can_save_in_place();
+}
+
 bool HexView::save() {
     const bool saved = source_.save();
     if (saved) {
@@ -235,6 +239,19 @@ bool HexView::save_with_progress(const std::function<bool(qint64, qint64)>& prog
 
 bool HexView::save_as_with_progress(const QString& path, const std::function<bool(qint64, qint64)>& progress_callback) {
     const bool saved = source_.save_as_with_progress(path, progress_callback);
+    if (saved) {
+        modified_ranges_.clear();
+        ++render_generation_;
+        invalidate_row_cache();
+        emit document_loaded(source_.display_name(), static_cast<qulonglong>(source_.size()));
+        emit_status();
+        viewport()->update();
+    }
+    return saved;
+}
+
+bool HexView::save_in_place_with_progress(const std::function<bool(qint64, qint64)>& progress_callback) {
+    const bool saved = source_.save_in_place_with_progress(progress_callback);
     if (saved) {
         modified_ranges_.clear();
         ++render_generation_;

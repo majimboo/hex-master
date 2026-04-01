@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 use std::ffi::{c_char, c_void, CStr};
 use std::fs;
-use std::fs::File;
-use std::io::Write;
+use std::fs::{File, OpenOptions};
+use std::io::{Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::ptr;
 
@@ -335,6 +335,92 @@ fn save_document(
     true
 }
 
+fn save_document_in_place(
+    document: &mut FileDocumentHandle,
+    progress_callback: Option<SaveProgressCallback>,
+    user_data: *mut c_void,
+) -> bool {
+    if document.materialized.is_some() {
+        return false;
+    }
+
+    let total_dirty = document.overwrites.len() as u64;
+    if !report_save_progress(progress_callback, user_data, 0, total_dirty) {
+        return false;
+    }
+    if total_dirty == 0 {
+        document.undo_stack.clear();
+        document.redo_stack.clear();
+        return true;
+    }
+
+    let mut output = match OpenOptions::new().write(true).open(&document.path) {
+        Ok(file) => file,
+        Err(_) => return false,
+    };
+
+    let mut written = 0_u64;
+    let mut current_start = 0_u64;
+    let mut current_bytes: Vec<u8> = Vec::new();
+    let mut previous_offset = None::<u64>;
+
+    let flush_run = |output: &mut File, start: u64, bytes: &[u8]| -> bool {
+        if bytes.is_empty() {
+            return true;
+        }
+        if output.seek(SeekFrom::Start(start)).is_err() {
+            return false;
+        }
+        output.write_all(bytes).is_ok()
+    };
+
+    for (&offset, &value) in document.overwrites.iter() {
+        match previous_offset {
+            Some(prev) if offset == prev + 1 => {
+                current_bytes.push(value);
+            }
+            Some(_) => {
+                if !flush_run(&mut output, current_start, &current_bytes) {
+                    return false;
+                }
+                written += current_bytes.len() as u64;
+                if !report_save_progress(progress_callback, user_data, written, total_dirty) {
+                    return false;
+                }
+                current_start = offset;
+                current_bytes.clear();
+                current_bytes.push(value);
+            }
+            None => {
+                current_start = offset;
+                current_bytes.push(value);
+            }
+        }
+        previous_offset = Some(offset);
+    }
+
+    if !flush_run(&mut output, current_start, &current_bytes) {
+        return false;
+    }
+    written += current_bytes.len() as u64;
+    if !report_save_progress(progress_callback, user_data, written, total_dirty) {
+        return false;
+    }
+
+    if output.flush().is_err() {
+        return false;
+    }
+
+    let Ok(source) = FileByteSource::open(&document.path) else {
+        return false;
+    };
+    document.source = source;
+    document.overwrites.clear();
+    document.undo_stack.clear();
+    document.redo_stack.clear();
+    true
+}
+
 fn temp_save_path_for(target_path: &PathBuf) -> PathBuf {
     let mut temp_path = target_path.clone();
     let temp_extension = match target_path.extension().and_then(|ext| ext.to_str()) {
@@ -582,7 +668,9 @@ pub extern "C" fn hm_file_document_is_dirty(handle: *const FileDocumentHandle) -
         return false;
     }
 
-    unsafe { !(*handle).overwrites.is_empty() }
+    unsafe {
+        (*handle).materialized.is_some() || !(*handle).overwrites.is_empty()
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -592,6 +680,16 @@ pub extern "C" fn hm_file_document_is_read_only(handle: *const FileDocumentHandl
     }
 
     unsafe { (*handle).source.metadata().read_only }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn hm_file_document_can_save_in_place(handle: *const FileDocumentHandle) -> bool {
+    if handle.is_null() {
+        return false;
+    }
+
+    let document = unsafe { &*handle };
+    !document.source.metadata().read_only && document.materialized.is_none() && !document.overwrites.is_empty()
 }
 
 #[unsafe(no_mangle)]
@@ -677,6 +775,24 @@ pub extern "C" fn hm_file_document_save_with_progress(
     }
 
     save_document(document, &target_path, progress_callback, user_data)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn hm_file_document_save_in_place_with_progress(
+    handle: *mut FileDocumentHandle,
+    progress_callback: Option<SaveProgressCallback>,
+    user_data: *mut c_void,
+) -> bool {
+    if handle.is_null() {
+        return false;
+    }
+
+    let document = unsafe { &mut *handle };
+    if document.source.metadata().read_only {
+        return false;
+    }
+
+    save_document_in_place(document, progress_callback, user_data)
 }
 
 #[cfg(test)]
@@ -787,6 +903,47 @@ mod tests {
         hm_file_document_close(handle);
         fs::remove_file(source_path).expect("cleanup source");
         fs::remove_file(target_path).expect("cleanup target");
+    }
+
+    #[test]
+    fn overwrite_only_documents_can_save_in_place() {
+        let path = create_temp_file("save_in_place_fast", &[0x10, 0x20, 0x30, 0x40]);
+        let handle = open_handle(&path);
+
+        let replacement = [0xAA, 0xBB];
+        assert!(hm_file_document_overwrite_range(
+            handle,
+            1,
+            replacement.as_ptr(),
+            replacement.len()
+        ));
+        assert!(hm_file_document_can_save_in_place(handle));
+        assert!(hm_file_document_save_in_place_with_progress(handle, None, ptr::null_mut()));
+        assert_eq!(fs::read(&path).expect("read saved file"), vec![0x10, 0xAA, 0xBB, 0x40]);
+        assert!(!hm_file_document_is_dirty(handle));
+
+        hm_file_document_close(handle);
+        fs::remove_file(path).expect("cleanup temp file");
+    }
+
+    #[test]
+    fn structural_edits_do_not_use_in_place_save() {
+        let path = create_temp_file("save_in_place_structural", &[1, 2, 3, 4]);
+        let handle = open_handle(&path);
+
+        let inserted = [9, 9];
+        assert!(hm_file_document_insert_range(
+            handle,
+            2,
+            inserted.as_ptr(),
+            inserted.len()
+        ));
+        assert!(hm_file_document_is_dirty(handle));
+        assert!(!hm_file_document_can_save_in_place(handle));
+        assert!(!hm_file_document_save_in_place_with_progress(handle, None, ptr::null_mut()));
+
+        hm_file_document_close(handle);
+        fs::remove_file(path).expect("cleanup temp file");
     }
 
     #[test]

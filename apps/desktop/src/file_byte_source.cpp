@@ -198,6 +198,10 @@ bool FileByteSource::is_dirty() const {
     return handle_ != nullptr && hm_file_document_is_dirty(handle_);
 }
 
+bool FileByteSource::can_save_in_place() const {
+    return handle_ != nullptr && hm_file_document_can_save_in_place(handle_);
+}
+
 bool FileByteSource::save() {
     return save_as_with_progress(path_, {});
 }
@@ -225,6 +229,23 @@ bool FileByteSource::save_as_with_progress(const QString& path, const std::funct
     }
 
     path_ = path;
+    clear_cache();
+    return true;
+}
+
+bool FileByteSource::save_in_place_with_progress(const std::function<bool(qint64, qint64)>& progress_callback) {
+    if (handle_ == nullptr || path_.isEmpty()) {
+        return false;
+    }
+
+    SaveProgressContext context{&progress_callback};
+    const bool saved = progress_callback
+        ? hm_file_document_save_in_place_with_progress(handle_, save_progress_thunk, &context)
+        : hm_file_document_save_in_place_with_progress(handle_, nullptr, nullptr);
+    if (!saved) {
+        return false;
+    }
+
     clear_cache();
     return true;
 }

@@ -19,8 +19,8 @@ Already in place:
 - configurable viewport layout with persisted view state
 - recent files, settings, session restore, and About dialog
 - unified versioning and GitHub release infrastructure
-- schema editor with structure parsing and coverage reporting
-- side-by-side compare tool with results, progress, and diff navigation
+- schema editor tool window with structure parsing, progress, and coverage reporting
+- compare tool window with side-by-side views, results, progress, and diff navigation
 
 ## Near-Term Priorities
 
@@ -93,6 +93,7 @@ Exit criteria:
 Possible future features after the 1.x stability work:
 
 - aligned binary diff with insert/delete-aware compare
+- export parsed schema structures to JSON or similar interchange formats
 - entropy and histogram views
 - annotations
 - richer schema tooling or visual structure builders

@@ -70,6 +70,11 @@ private:
         Never,
     };
 
+    enum class SaveBackupMode {
+        Progress,
+        Fast,
+    };
+
     void setup_menu();
     void setup_central_widget();
     void setup_docks();
@@ -88,8 +93,10 @@ private:
     void add_replace_history(const QString& text);
     void refresh_goto_offset_widgets();
     SaveBackupPolicy save_backup_policy() const;
+    SaveBackupMode save_backup_mode() const;
+    bool resolve_backup_policy_for_save(const QString& path, SaveBackupPolicy* policy);
     bool confirm_explicit_save(const QString& title) const;
-    bool prepare_backup_for_save(const QString& path, const std::function<bool(qint64, qint64, const QString&)>& progress_callback);
+    bool prepare_backup_for_save(const QString& path, SaveBackupPolicy policy, const std::function<bool(qint64, qint64, const QString&)>& progress_callback);
     static bool copy_file_with_progress(const QString& source_path, const QString& target_path, const std::function<bool(qint64, qint64, const QString&)>& progress_callback);
     bool save_current_document(bool confirm_save, const QString* save_as_path = nullptr);
     static QString backup_path_for(const QString& path);
