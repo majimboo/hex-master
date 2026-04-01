@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Hex Master</title>
-    <meta name="description" content="Hex Master is a Windows-first hex editor for inspecting, searching, and editing binary files, including large multi-GB data sets.">
+    <meta name="description" content="Hex Master is a Windows-first hex editor for inspecting, searching, editing, comparing, and reverse-engineering binary files, including large multi-GB data sets.">
     <link rel="stylesheet" href="site.css">
 </head>
 <body>
@@ -120,8 +120,18 @@
                         <ul>
                             <li>Custom binary structure DSL</li>
                             <li>Schema editor with validation and recent files</li>
-                            <li>Apply schemas at a chosen base offset with coverage reporting</li>
+                            <li>Apply schemas at a chosen base offset with coverage reporting and JSON export</li>
+                            <li>Repeat blocks and dependent arrays for staged binary layouts</li>
                             <li><a href="schema-guide.html">Syntax guide and examples</a></li>
+                        </ul>
+                    </section>
+                    <section>
+                        <h3>Reverse Engineering Tools</h3>
+                        <ul>
+                            <li>3D Buffer Explorer for raw vertex and index buffers</li>
+                            <li>Heuristic scanning for candidate geometry regions</li>
+                            <li>Interactive preview with offset jump-back into the hex view</li>
+                            <li>Works alongside schema and compare workflows</li>
                         </ul>
                     </section>
                 </div>
@@ -141,6 +151,10 @@
                     <p>
                         Search, replace, backup, and save work in chunks instead of giant transient buffers.
                         That keeps long-running operations more predictable and makes progress reporting possible.
+                    </p>
+                    <p>
+                        Overwrite-only saves can patch dirty ranges directly in place, while structural saves stream
+                        spans from the original file and edited regions instead of building the full output in memory first.
                     </p>
                     <p>
                         The goal is practical desktop behavior on ordinary machines:

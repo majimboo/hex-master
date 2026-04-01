@@ -3,6 +3,7 @@
 Hex Master supports a compact schema DSL for describing binary structures and applying them at a chosen base offset.
 
 After a schema runs, the structure tree shows parsed offsets, sizes, and values. Selecting a field in the tree highlights the corresponding byte range in the main hex view.
+The Schema Editor can also export the parsed result tree to JSON.
 
 ## Overview
 
@@ -32,6 +33,38 @@ root Header {
 ```
 
 The base offset is chosen when you run the schema. Fields are parsed in order, and later fields can refer to earlier scalar fields in the same scope.
+
+## Staged layouts and repeat blocks
+
+The DSL also supports staged parsing where one part of the file describes a later section.
+
+Form:
+
+- `repeat alias in sourcePath { ... }`
+
+Inside a repeat block:
+
+- `alias` refers to the current item from the source array
+- dotted references such as `alias.faceCount` or `meshHeader.subHeaders` are allowed
+- repeated items are parsed in file order at the current cursor position
+
+Example:
+
+```txt
+root Example {
+  u32 meshCount
+  MeshHeader[meshCount] headers
+
+  repeat meshHeader in headers {
+    repeat subHeader in meshHeader.subHeaders {
+      Face[subHeader.faceCount] faces
+      f32[subHeader.vertexCount] posX
+      f32[subHeader.vertexCount] posY
+      f32[subHeader.vertexCount] posZ
+    }
+  }
+}
+```
 
 ## Supported field types
 
@@ -107,6 +140,7 @@ Count and offset fields now accept simple arithmetic expressions:
 Expressions can use:
 
 - earlier scalar fields in the same scope
+- dotted references inside repeat scopes such as `subHeader.vertexCount`
 - decimal and hexadecimal integer literals
 - `+`, `-`, `*`, `/`
 - parentheses
@@ -150,14 +184,53 @@ root CharAni {
 }
 ```
 
+## Real-world staged example
+
+`item.obj`-style staged header/body layouts can now be described with repeat blocks:
+
+```txt
+endian little
+
+struct SubHeader {
+  i32 faceCount
+  i32 vertexCount
+}
+
+struct MeshHeader {
+  i32 subMeshCount
+  SubHeader[subMeshCount] subHeaders
+}
+
+struct Face {
+  u16 a
+  u16 b
+  u16 c
+}
+
+root ItemObj {
+  i32 numMeshes
+  MeshHeader[numMeshes] headers
+
+  repeat meshHeader in headers {
+    repeat subHeader in meshHeader.subHeaders {
+      Face[subHeader.faceCount] faces
+      f32[subHeader.vertexCount] posX
+      f32[subHeader.vertexCount] posY
+      f32[subHeader.vertexCount] posZ
+    }
+  }
+}
+```
+
+See [docs/examples/item_obj.schema](/D:/projects/hex_master/docs/examples/item_obj.schema) for the fuller sample.
+
 ## Current limits
 
 The current schema engine is intentionally narrow:
 
 - dependent references must target earlier scalar fields in the same scope
-- no dotted paths yet
 - no unions or conditional fields yet
-- no cross-scope references yet
+- no arbitrary random-access pointer chasing outside supported offset expressions and repeat scopes
 - no named enums or bitfields yet
 
-Use the in-app `Tools > Schema Editor...` window to create, open, save, validate, and run schemas.
+Use the in-app `Tools > Schema Editor...` window to create, open, save, validate, run, and export schemas.

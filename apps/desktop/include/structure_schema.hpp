@@ -6,6 +6,7 @@
 #include <QVector>
 
 #include <functional>
+#include <memory>
 
 namespace StructureSchema {
 
@@ -22,9 +23,29 @@ struct FieldDefinition {
     int line = 0;
 };
 
+struct RepeatDefinition;
+
+struct StructItemDefinition {
+    enum class Kind {
+        Field,
+        Repeat,
+    };
+
+    Kind kind = Kind::Field;
+    FieldDefinition field;
+    std::shared_ptr<RepeatDefinition> repeat;
+};
+
+struct RepeatDefinition {
+    QString alias;
+    QString source_path;
+    QVector<StructItemDefinition> items;
+    int line = 0;
+};
+
 struct StructDefinition {
     QString name;
-    QVector<FieldDefinition> fields;
+    QVector<StructItemDefinition> items;
 };
 
 struct SchemaDefinition {
@@ -40,6 +61,7 @@ struct ParsedNode {
     qint64 offset = 0;
     qint64 size = 0;
     QVector<ParsedNode> children;
+    QMap<QString, quint64> symbols;
 };
 
 using ReadRangeCallback = std::function<QByteArray(qint64, qint64)>;

@@ -24,8 +24,10 @@ It is designed as a modern desktop alternative to Hex Workshop for inspecting an
 - loads and browses large binary files efficiently, including multi-GB data sets
 - bookmarks, checksums, recent files, and session restore
 - configurable viewport layout with persisted gutters, offsets, row numbers, and bytes-per-row
+- insert-bytes workflow with append-at-EOF support and context-menu insertion
 - compare tool with side-by-side binary views, diff navigation, and results
-- schema editor with a custom binary structure DSL, validation, coverage reporting, expression-based dependent arrays, and structured field inspection
+- schema editor with a custom binary structure DSL, validation, coverage reporting, JSON export, repeat blocks, and structured field inspection
+- 3D Buffer Explorer tool for reverse-engineering raw vertex and index buffers with heuristic scanning and preview
 
 ## Large File Handling
 
@@ -34,7 +36,8 @@ Hex Master is designed to work on large binary files without treating open as a 
 - the viewport reads only the visible region plus a bounded cache window instead of materializing the entire file for display
 - scrolling, inspection, and navigation operate on targeted range reads, which keeps startup fast even on multi-GB files
 - search scans the file in chunks rather than building one giant in-memory search buffer
-- save writes data in chunks with progress reporting, which keeps memory use controlled during large writes
+- overwrite-only saves patch dirty ranges in place, while structural saves stream spans instead of materializing a full rewritten image in memory
+- save, backup, compare, schema export, and other long operations use progress reporting so large-file work stays observable
 
 This is mainly a practical engineering choice: keep the desktop shell responsive, avoid unnecessary memory growth, and make large-file work predictable on ordinary machines.
 

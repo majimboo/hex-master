@@ -1,0 +1,54 @@
+endian little
+
+struct Vec3 {
+  f32 x
+  f32 y
+  f32 z
+}
+
+struct SubHeader {
+  i32 faceCount
+  i32 vertexCount
+}
+
+struct MeshHeader {
+  i32 subMeshCount
+  SubHeader[subMeshCount] subHeaders
+}
+
+struct Face {
+  u16 a
+  u16 b
+  u16 c
+}
+
+root ItemObj {
+  i32 numMeshes
+  MeshHeader[numMeshes] headers
+
+  repeat meshHeader in headers {
+    Vec3[5] unkBlocks
+
+    repeat subHeader in meshHeader.subHeaders {
+      i32 unk6
+      f32[16] unk7
+      i16 texture0
+      i16 unkTex0
+      i16 texture1
+      i16 unkTex1
+
+      Face[subHeader.faceCount] faces
+
+      f32[subHeader.vertexCount] posX
+      f32[subHeader.vertexCount] posY
+      f32[subHeader.vertexCount] posZ
+
+      f32[subHeader.vertexCount] normalX
+      f32[subHeader.vertexCount] normalY
+      f32[subHeader.vertexCount] normalZ
+
+      f32[subHeader.vertexCount] uvU
+      f32[subHeader.vertexCount] uvV
+    }
+  }
+}

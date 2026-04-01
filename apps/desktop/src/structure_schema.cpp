@@ -268,7 +268,9 @@ private:
             const int start = index_;
             ++index_;
             while (index_ < expression_.size()
-                   && (expression_.at(index_).isLetterOrNumber() || expression_.at(index_) == QLatin1Char('_'))) {
+                   && (expression_.at(index_).isLetterOrNumber()
+                       || expression_.at(index_) == QLatin1Char('_')
+                       || expression_.at(index_) == QLatin1Char('.'))) {
                 ++index_;
             }
             current_ = {ExpressionTokenKind::Identifier, expression_.mid(start, index_ - start), 0};
@@ -369,6 +371,31 @@ struct EvaluationContext {
     ProgressCallback progress_callback;
 };
 
+const ParsedNode* resolve_node_path(const QMap<QString, ParsedNode>& local_nodes, const QString& path) {
+    const QStringList parts = path.split(QLatin1Char('.'), Qt::SkipEmptyParts);
+    if (parts.isEmpty()) {
+        return nullptr;
+    }
+
+    auto it = local_nodes.constFind(parts.first());
+    if (it == local_nodes.cend()) {
+        return nullptr;
+    }
+
+    const ParsedNode* current = &it.value();
+    for (int index = 1; index < parts.size(); ++index) {
+        const QString& part = parts.at(index);
+        const auto child_it = std::find_if(current->children.cbegin(), current->children.cend(), [&](const ParsedNode& child) {
+            return child.name == part;
+        });
+        if (child_it == current->children.cend()) {
+            return nullptr;
+        }
+        current = &(*child_it);
+    }
+    return current;
+}
+
 bool report_progress(const EvaluationContext& context, qint64 current_offset, int line, QString* error_message) {
     if (!context.progress_callback) {
         return true;
@@ -388,11 +415,21 @@ bool evaluate_struct(
     QString* error_message,
     int line_hint);
 
+bool evaluate_item(
+    const EvaluationContext& context,
+    const StructItemDefinition& item,
+    qint64& cursor,
+    QMap<QString, quint64>& local_values,
+    QMap<QString, ParsedNode>& local_nodes,
+    ParsedNode& node,
+    QString* error_message);
+
 bool evaluate_field(
     const EvaluationContext& context,
     const FieldDefinition& field,
     qint64& cursor,
     QMap<QString, quint64>& local_values,
+    QMap<QString, ParsedNode>& local_nodes,
     ParsedNode& node,
     QString* error_message) {
     PrimitiveInfo primitive;
@@ -447,10 +484,12 @@ bool evaluate_field(
         node.value = format_bytes_preview(bytes);
         if (field.count_token.isEmpty()) {
             local_values.insert(field.name, static_cast<quint64>(size));
+            node.symbols.insert(field.name, static_cast<quint64>(size));
         }
         if (field.offset_token.isEmpty()) {
             cursor += size;
         }
+        local_nodes.insert(field.name, node);
         return report_progress(context, field_offset + size, field.line, error_message);
     }
 
@@ -472,6 +511,7 @@ bool evaluate_field(
                                  .arg(static_cast<qulonglong>(decode_unsigned(bytes, context.schema->endianness)), primitive.width * 2, 16, QChar(u'0'))
                                  .toUpper();
                 local_values.insert(field.name, static_cast<quint64>(value));
+                node.symbols.insert(field.name, static_cast<quint64>(value));
             } else {
                 const quint64 value = decode_unsigned(bytes, context.schema->endianness);
                 node.value = QStringLiteral("%1 (0x%2)")
@@ -479,6 +519,7 @@ bool evaluate_field(
                                  .arg(static_cast<qulonglong>(value), primitive.width * 2, 16, QChar(u'0'))
                                  .toUpper();
                 local_values.insert(field.name, value);
+                node.symbols.insert(field.name, value);
             }
 
             if (!primitive.is_signed && !primitive.is_float) {
@@ -487,6 +528,7 @@ bool evaluate_field(
             if (field.offset_token.isEmpty()) {
                 cursor += primitive.width;
             }
+            local_nodes.insert(field.name, node);
             return report_progress(context, field_offset + primitive.width, field.line, error_message);
         }
 
@@ -523,6 +565,7 @@ bool evaluate_field(
         if (field.offset_token.isEmpty()) {
             cursor += node.size;
         }
+        local_nodes.insert(field.name, node);
         return true;
     }
 
@@ -535,9 +578,11 @@ bool evaluate_field(
         node.children.push_back(child);
         node.size = child.size;
         node.value = QStringLiteral("%1 bytes").arg(child.size);
+        node.symbols = child.symbols;
         if (field.offset_token.isEmpty()) {
             cursor += child.size;
         }
+        local_nodes.insert(field.name, node);
         return report_progress(context, field_offset + child.size, field.line, error_message);
     }
 
@@ -559,6 +604,7 @@ bool evaluate_field(
     if (field.offset_token.isEmpty()) {
         cursor += node.size;
     }
+    local_nodes.insert(field.name, node);
     return true;
 }
 
@@ -578,11 +624,12 @@ bool evaluate_struct(
 
     qint64 cursor = start_offset;
     QMap<QString, quint64> local_values;
-    for (const FieldDefinition& field : definition.fields) {
+    QMap<QString, ParsedNode> local_nodes;
+    for (const StructItemDefinition& item : definition.items) {
         ParsedNode child;
-        if (!evaluate_field(context, field, cursor, local_values, child, error_message)) {
+        if (!evaluate_item(context, item, cursor, local_values, local_nodes, child, error_message)) {
             if (error_message != nullptr && error_message->isEmpty()) {
-                *error_message = QStringLiteral("Line %1: Failed to evaluate `%2`.").arg(line_hint).arg(field.name);
+                *error_message = QStringLiteral("Line %1: Failed to evaluate schema item.").arg(line_hint);
             }
             return false;
         }
@@ -595,7 +642,85 @@ bool evaluate_struct(
     }
     node.size = qMax<qint64>(0, end_offset - start_offset);
     node.value = QStringLiteral("%1 bytes").arg(node.size);
+    node.symbols = local_values;
     return true;
+}
+
+bool evaluate_repeat(
+    const EvaluationContext& context,
+    const RepeatDefinition& repeat,
+    qint64& cursor,
+    const QMap<QString, quint64>& local_values,
+    const QMap<QString, ParsedNode>& local_nodes,
+    ParsedNode& node,
+    QString* error_message) {
+    const ParsedNode* source = resolve_node_path(local_nodes, repeat.source_path);
+    if (source == nullptr) {
+        return set_error(error_message, repeat.line, QStringLiteral("Unknown repeat source `%1`.").arg(repeat.source_path));
+    }
+
+    node.name = repeat.alias;
+    node.type_name = QStringLiteral("repeat %1 in %2").arg(repeat.alias, repeat.source_path);
+    node.offset = cursor;
+    node.size = 0;
+
+    qint64 running_offset = cursor;
+    for (int index = 0; index < source->children.size(); ++index) {
+        const ParsedNode& iteration_source = source->children.at(index);
+        ParsedNode iteration_node;
+        iteration_node.name = QStringLiteral("%1[%2]").arg(repeat.alias).arg(index);
+        iteration_node.type_name = repeat.alias;
+        iteration_node.offset = running_offset;
+
+        qint64 iteration_cursor = running_offset;
+        QMap<QString, quint64> iteration_values = local_values;
+        QMap<QString, ParsedNode> iteration_nodes = local_nodes;
+        iteration_nodes.insert(repeat.alias, iteration_source);
+        for (auto it = iteration_source.symbols.cbegin(); it != iteration_source.symbols.cend(); ++it) {
+            iteration_values.insert(QStringLiteral("%1.%2").arg(repeat.alias, it.key()), it.value());
+            iteration_values.insert(it.key(), it.value());
+        }
+
+        for (const StructItemDefinition& child_item : repeat.items) {
+            ParsedNode child_node;
+            if (!evaluate_item(context, child_item, iteration_cursor, iteration_values, iteration_nodes, child_node, error_message)) {
+                return false;
+            }
+            iteration_node.children.push_back(child_node);
+        }
+
+        qint64 iteration_end = running_offset;
+        for (const ParsedNode& child : iteration_node.children) {
+            iteration_end = qMax(iteration_end, child.offset + child.size);
+        }
+        iteration_node.size = qMax<qint64>(0, iteration_end - running_offset);
+        iteration_node.value = QStringLiteral("%1 bytes").arg(iteration_node.size);
+        iteration_node.symbols = iteration_values;
+        node.children.push_back(iteration_node);
+        running_offset = iteration_end;
+    }
+
+    node.size = qMax<qint64>(0, running_offset - cursor);
+    node.value = QStringLiteral("%1 item(s)").arg(node.children.size());
+    cursor = running_offset;
+    return true;
+}
+
+bool evaluate_item(
+    const EvaluationContext& context,
+    const StructItemDefinition& item,
+    qint64& cursor,
+    QMap<QString, quint64>& local_values,
+    QMap<QString, ParsedNode>& local_nodes,
+    ParsedNode& node,
+    QString* error_message) {
+    if (item.kind == StructItemDefinition::Kind::Field) {
+        return evaluate_field(context, item.field, cursor, local_values, local_nodes, node, error_message);
+    }
+    if (!item.repeat) {
+        return set_error(error_message, 0, QStringLiteral("Invalid repeat definition."));
+    }
+    return evaluate_repeat(context, *item.repeat, cursor, local_values, local_nodes, node, error_message);
 }
 
 } // namespace
@@ -604,11 +729,13 @@ bool parse_schema(const QString& text, SchemaDefinition& schema, QString* error_
     schema = SchemaDefinition{};
     StructDefinition current_struct;
     bool in_struct = false;
+    QVector<std::shared_ptr<RepeatDefinition>> repeat_stack;
 
     const auto lines = text.split(QLatin1Char('\n'));
     const QRegularExpression struct_pattern(QStringLiteral(R"(^struct\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{$)"));
     const QRegularExpression root_pattern(QStringLiteral(R"(^root\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{$)"));
     const QRegularExpression endian_pattern(QStringLiteral(R"(^endian\s+(little|big)$)"));
+    const QRegularExpression repeat_pattern(QStringLiteral(R"(^repeat\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s+([A-Za-z_][A-Za-z0-9_\.]*)\s*\{$)"));
     const QRegularExpression field_pattern(QStringLiteral(R"(^(bytes|u8|i8|u16|i16|u32|i32|u64|i64|f32|f64|[A-Za-z_][A-Za-z0-9_]*)(?:\[(.+?)\])?\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+@(.+))?$)"));
 
     for (int index = 0; index < lines.size(); ++index) {
@@ -620,12 +747,34 @@ bool parse_schema(const QString& text, SchemaDefinition& schema, QString* error_
 
         if (in_struct) {
             if (line == QStringLiteral("}")) {
-                if (schema.structs.contains(current_struct.name)) {
-                    return set_error(error_message, line_number, QStringLiteral("Duplicate struct `%1`.").arg(current_struct.name));
+                if (!repeat_stack.isEmpty()) {
+                    repeat_stack.removeLast();
+                } else {
+                    if (schema.structs.contains(current_struct.name)) {
+                        return set_error(error_message, line_number, QStringLiteral("Duplicate struct `%1`.").arg(current_struct.name));
+                    }
+                    schema.structs.insert(current_struct.name, current_struct);
+                    current_struct = StructDefinition{};
+                    in_struct = false;
                 }
-                schema.structs.insert(current_struct.name, current_struct);
-                current_struct = StructDefinition{};
-                in_struct = false;
+                continue;
+            }
+
+            auto current_items = [&]() -> QVector<StructItemDefinition>* {
+                return repeat_stack.isEmpty() ? &current_struct.items : &repeat_stack.last()->items;
+            };
+
+            auto repeat_match = repeat_pattern.match(line);
+            if (repeat_match.hasMatch()) {
+                auto repeat = std::make_shared<RepeatDefinition>();
+                repeat->alias = repeat_match.captured(1);
+                repeat->source_path = repeat_match.captured(2);
+                repeat->line = line_number;
+                StructItemDefinition item;
+                item.kind = StructItemDefinition::Kind::Repeat;
+                item.repeat = repeat;
+                current_items()->push_back(item);
+                repeat_stack.push_back(repeat);
                 continue;
             }
 
@@ -634,13 +783,16 @@ bool parse_schema(const QString& text, SchemaDefinition& schema, QString* error_
                 return set_error(error_message, line_number, QStringLiteral("Invalid field definition."));
             }
 
-            current_struct.fields.push_back(FieldDefinition{
+            StructItemDefinition item;
+            item.kind = StructItemDefinition::Kind::Field;
+            item.field = FieldDefinition{
                 match.captured(1),
                 match.captured(3),
                 match.captured(2).trimmed(),
                 match.captured(4).trimmed(),
                 line_number,
-            });
+            };
+            current_items()->push_back(item);
             continue;
         }
 
@@ -673,7 +825,7 @@ bool parse_schema(const QString& text, SchemaDefinition& schema, QString* error_
         return set_error(error_message, line_number, QStringLiteral("Unexpected statement."));
     }
 
-    if (in_struct) {
+    if (in_struct || !repeat_stack.isEmpty()) {
         return set_error(error_message, lines.size(), QStringLiteral("Missing closing `}`."));
     }
     if (schema.root_name.isEmpty()) {

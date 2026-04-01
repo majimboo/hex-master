@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Hex Master Schema Guide</title>
-    <meta name="description" content="Schema DSL guide for Hex Master, including grammar, types, expressions, arrays, offsets, and working examples.">
+    <meta name="description" content="Schema DSL guide for Hex Master, including grammar, repeat blocks, expressions, arrays, offsets, export, and working examples.">
     <link rel="stylesheet" href="site.css">
 </head>
 <body>
@@ -30,8 +30,8 @@
                     <h1>Define binary layouts with a compact, file-focused DSL.</h1>
                     <p class="lead">
                         Hex Master schemas describe endianness, named structs, scalar fields, byte ranges,
-                        arrays, and offset-based sections. Run a schema at a chosen base offset to parse a
-                        file region into a structured tree with offsets, sizes, and coverage reporting.
+                        arrays, repeat blocks, and offset-based sections. Run a schema at a chosen base offset to parse a
+                        file region into a structured tree with offsets, sizes, coverage reporting, and JSON export.
                     </p>
                 </div>
 
@@ -46,7 +46,7 @@
                     </div>
                     <div class="meta-row">
                         <span>Best use</span>
-                        <strong>Custom binary headers, tables, animation blocks, and packed file layouts</strong>
+                        <strong>Custom binary headers, staged tables, animation blocks, and packed file layouts</strong>
                     </div>
                 </div>
             </section>
@@ -72,6 +72,7 @@
                             <li>The base offset is chosen when you run the schema</li>
                             <li>Fields parse in order</li>
                             <li>Later fields can refer to earlier scalar fields in the same scope</li>
+                            <li>Repeat blocks can iterate arrays parsed earlier in the file</li>
                         </ul>
                     </section>
                 </div>
@@ -150,6 +151,10 @@
                         <code>Entry[count * 2] entries @base + 0x20</code>
                         <span>Use expressions in both count and offset</span>
                     </div>
+                    <div class="guide-row">
+                        <code>repeat subHeader in meshHeader.subHeaders { ... }</code>
+                        <span>Iterate a previously parsed array to drive a later staged section</span>
+                    </div>
                 </div>
             </section>
 
@@ -168,6 +173,7 @@
                             <li>Hex integers like <code>0x20</code></li>
                             <li><code>+</code>, <code>-</code>, <code>*</code>, <code>/</code></li>
                             <li>Parentheses</li>
+                            <li>Dotted references inside repeat scopes like <code>subHeader.faceCount</code></li>
                         </ul>
                     </section>
                     <section class="guide-panel">
@@ -176,6 +182,32 @@
                             <li><code>Entry[count + 1] entries</code></li>
                             <li><code>bytes[numBones * 48] pose_data</code></li>
                             <li><code>Section[sectionCount] sections @headerSize + 0x20</code></li>
+                        </ul>
+                    </section>
+                </div>
+            </section>
+
+            <section class="feature-section">
+                <div class="section-intro">
+                    <p class="eyebrow">Repeat Blocks</p>
+                    <h2>Use staged parsing when headers describe later sections.</h2>
+                </div>
+
+                <div class="guide-grid">
+                    <section class="guide-panel">
+                        <h3>Form</h3>
+                        <ul>
+                            <li><code>repeat alias in sourcePath { ... }</code></li>
+                            <li>The source must resolve to an earlier parsed array</li>
+                            <li>The block parses sequentially at the current file position</li>
+                        </ul>
+                    </section>
+                    <section class="guide-panel">
+                        <h3>Inside the block</h3>
+                        <ul>
+                            <li><code>alias</code> refers to the current repeated item</li>
+                            <li>Dotted references like <code>meshHeader.subHeaders</code> are supported</li>
+                            <li>Counts and offsets can use values such as <code>subHeader.vertexCount</code></li>
                         </ul>
                     </section>
                 </div>
@@ -202,6 +234,7 @@
                             <li>Click a field to select that byte range in the main hex view</li>
                             <li>Use the tree to inspect parsed structure layout</li>
                             <li>Use the main hex editor itself for byte-level modifications</li>
+                            <li>Export the current parsed tree to JSON from the Schema Editor file menu</li>
                         </ul>
                     </section>
                 </div>
@@ -288,6 +321,54 @@
                 </div>
             </section>
 
+            <section class="feature-section">
+                <div class="section-intro">
+                    <p class="eyebrow">Examples</p>
+                    <h2>Staged mesh layout with repeat blocks</h2>
+                </div>
+
+                <ol class="schema-code schema-lines">
+                    <li><code>endian little</code></li>
+                    <li><code></code></li>
+                    <li><code>struct SubHeader {</code></li>
+                    <li><code>  i32 faceCount</code></li>
+                    <li><code>  i32 vertexCount</code></li>
+                    <li><code>}</code></li>
+                    <li><code></code></li>
+                    <li><code>struct MeshHeader {</code></li>
+                    <li><code>  i32 subMeshCount</code></li>
+                    <li><code>  SubHeader[subMeshCount] subHeaders</code></li>
+                    <li><code>}</code></li>
+                    <li><code></code></li>
+                    <li><code>struct Face {</code></li>
+                    <li><code>  u16 a</code></li>
+                    <li><code>  u16 b</code></li>
+                    <li><code>  u16 c</code></li>
+                    <li><code>}</code></li>
+                    <li><code></code></li>
+                    <li><code>root ItemObj {</code></li>
+                    <li><code>  i32 numMeshes</code></li>
+                    <li><code>  MeshHeader[numMeshes] headers</code></li>
+                    <li><code></code></li>
+                    <li><code>  repeat meshHeader in headers {</code></li>
+                    <li><code>    repeat subHeader in meshHeader.subHeaders {</code></li>
+                    <li><code>      Face[subHeader.faceCount] faces</code></li>
+                    <li><code>      f32[subHeader.vertexCount] posX</code></li>
+                    <li><code>      f32[subHeader.vertexCount] posY</code></li>
+                    <li><code>      f32[subHeader.vertexCount] posZ</code></li>
+                    <li><code>    }</code></li>
+                    <li><code>  }</code></li>
+                    <li><code>}</code></li>
+                </ol>
+
+                <div class="guide-note">
+                    <p>
+                        This pattern is useful for formats where headers are grouped first, but the payloads they describe
+                        appear later in the file. A fuller sample is available in <code>docs/examples/item_obj.schema</code>.
+                    </p>
+                </div>
+            </section>
+
             <section class="feature-section" id="limits">
                 <div class="section-intro">
                     <p class="eyebrow">Limits</p>
@@ -298,10 +379,9 @@
                     <section class="guide-panel">
                         <h3>Not supported</h3>
                         <ul>
-                            <li>Dotted paths like <code>header.count</code></li>
                             <li>Conditional fields</li>
                             <li>Unions</li>
-                            <li>Cross-scope references</li>
+                            <li>Arbitrary random-access pointer chasing beyond supported offset expressions and repeat scopes</li>
                             <li>Named enums or bitfields</li>
                         </ul>
                     </section>
@@ -309,7 +389,7 @@
                         <h3>Authoring rule</h3>
                         <ul>
                             <li>Define dependent fields after the scalar values they depend on</li>
-                            <li>Keep references within the same struct scope</li>
+                            <li>Use repeat blocks when a later section depends on an earlier parsed array</li>
                         </ul>
                     </section>
                 </div>

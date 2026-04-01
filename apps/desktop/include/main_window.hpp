@@ -121,6 +121,7 @@ private:
     void compute_hashes();
     void open_schema_tool();
     void open_compare_tool();
+    void open_model_explorer_tool();
     void open_settings();
     void show_about();
     void set_insert_mode();
@@ -196,6 +197,7 @@ private:
     QLabel* status_label_ = nullptr;
     QDialog* schema_tool_dialog_ = nullptr;
     QDialog* compare_tool_dialog_ = nullptr;
+    QDialog* model_explorer_dialog_ = nullptr;
     QToolBar* toolbar_ = nullptr;
     QWidget* edit_mode_toggle_ = nullptr;
     QComboBox* goto_offset_edit_ = nullptr;
@@ -215,6 +217,7 @@ private:
     QAction* compute_hashes_action_ = nullptr;
     QAction* schema_tool_action_ = nullptr;
     QAction* compare_tool_action_ = nullptr;
+    QAction* model_explorer_tool_action_ = nullptr;
     QAction* settings_action_ = nullptr;
     QAction* insert_mode_action_ = nullptr;
     QAction* overwrite_mode_action_ = nullptr;

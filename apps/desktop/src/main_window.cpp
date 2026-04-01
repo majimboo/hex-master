@@ -45,6 +45,9 @@
 #include <QStatusBar>
 #include <QStyleOptionButton>
 #include <QTabWidget>
+#include <QTableWidget>
+#include <QSpinBox>
+#include <QDoubleSpinBox>
 #include <QTextBlock>
 #include <QTextStream>
 #include <QTextEdit>
@@ -56,9 +59,13 @@
 #include <QToolBar>
 #include <QUrl>
 #include <QWidget>
+#include <QMatrix4x4>
+#include <QVector3D>
+#include <QWheelEvent>
 
 #include <limits>
 #include <atomic>
+#include <cmath>
 
 namespace {
 class SchemaCodeEditor;
@@ -71,6 +78,47 @@ struct CompareComputationResult {
     QVector<QVariantMap> rows;
     QVector<HexView::HighlightRange> left_highlights;
     QVector<HexView::HighlightRange> right_highlights;
+};
+
+enum class ModelIndexType {
+    None,
+    UInt16,
+    UInt32,
+};
+
+enum class ModelPrimitiveMode {
+    Triangles,
+    Lines,
+    Points,
+};
+
+enum class ModelVertexLayout {
+    XYZTogether,
+    XYZBlocks,
+};
+
+struct ParsedModelPreview {
+    QVector<QVector3D> vertices;
+    QVector<quint32> indices;
+    ModelPrimitiveMode primitive = ModelPrimitiveMode::Triangles;
+};
+
+struct ModelScanCandidate {
+    quint64 vertex_offset = 0;
+    int vertex_stride = 12;
+    int vertex_count = 0;
+    int score = 0;
+    ModelVertexLayout vertex_layout = ModelVertexLayout::XYZTogether;
+    quint64 index_offset = 0;
+    int index_count = 0;
+    ModelIndexType index_type = ModelIndexType::None;
+};
+
+struct ModelScanResult {
+    bool ok = false;
+    bool canceled = false;
+    QString error;
+    QVector<ModelScanCandidate> candidates;
 };
 
 struct SchemaRunResult {
@@ -313,6 +361,587 @@ private:
     QAction* overwrite_action_ = nullptr;
     int hovered_segment_ = -1;
     int pressed_segment_ = -1;
+};
+
+QString format_model_offset(quint64 offset) {
+    return QStringLiteral("0x%1").arg(offset, 0, 16).toUpper();
+}
+
+bool parse_model_offset(const QString& text, quint64* value) {
+    if (value == nullptr) {
+        return false;
+    }
+
+    QString trimmed = text.trimmed();
+    if (trimmed.isEmpty()) {
+        return false;
+    }
+
+    bool ok = false;
+    const quint64 parsed = trimmed.startsWith(QStringLiteral("0x"), Qt::CaseInsensitive)
+        ? trimmed.mid(2).toULongLong(&ok, 16)
+        : trimmed.toULongLong(&ok, 10);
+    if (!ok) {
+        return false;
+    }
+
+    *value = parsed;
+    return true;
+}
+
+QString model_index_type_label(ModelIndexType type) {
+    switch (type) {
+    case ModelIndexType::None:
+        return QStringLiteral("None");
+    case ModelIndexType::UInt16:
+        return QStringLiteral("u16");
+    case ModelIndexType::UInt32:
+        return QStringLiteral("u32");
+    }
+    return QStringLiteral("Unknown");
+}
+
+QString model_vertex_layout_label(ModelVertexLayout layout) {
+    switch (layout) {
+    case ModelVertexLayout::XYZTogether:
+        return QStringLiteral("XYZ together");
+    case ModelVertexLayout::XYZBlocks:
+        return QStringLiteral("X block, Y block, Z block");
+    }
+    return QStringLiteral("Unknown");
+}
+
+float read_f32_le(const QByteArray& bytes, int offset) {
+    float value = 0.0f;
+    std::memcpy(&value, bytes.constData() + offset, sizeof(float));
+    return value;
+}
+
+quint16 read_u16_le(const QByteArray& bytes, int offset) {
+    return static_cast<quint16>(static_cast<quint8>(bytes.at(offset)))
+        | (static_cast<quint16>(static_cast<quint8>(bytes.at(offset + 1))) << 8);
+}
+
+quint32 read_u32_le(const QByteArray& bytes, int offset) {
+    return static_cast<quint32>(static_cast<quint8>(bytes.at(offset)))
+        | (static_cast<quint32>(static_cast<quint8>(bytes.at(offset + 1))) << 8)
+        | (static_cast<quint32>(static_cast<quint8>(bytes.at(offset + 2))) << 16)
+        | (static_cast<quint32>(static_cast<quint8>(bytes.at(offset + 3))) << 24);
+}
+
+bool load_model_preview(
+    const QString& path,
+    quint64 vertex_offset,
+    int vertex_count,
+    ModelVertexLayout vertex_layout,
+    int vertex_stride,
+    int x_offset,
+    int y_offset,
+    int z_offset,
+    quint64 index_offset,
+    int index_count,
+    ModelIndexType index_type,
+    ModelPrimitiveMode primitive,
+    ParsedModelPreview* preview,
+    QString* error_message) {
+    if (preview == nullptr) {
+        return false;
+    }
+
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        if (error_message != nullptr) {
+            *error_message = QStringLiteral("Could not open the source file.");
+        }
+        return false;
+    }
+
+    const qint64 file_size = file.size();
+    if (vertex_count <= 0) {
+        if (error_message != nullptr) {
+            *error_message = QStringLiteral("Enter a valid vertex count.");
+        }
+        return false;
+    }
+    if (vertex_layout == ModelVertexLayout::XYZTogether
+        && (vertex_stride < 12
+            || x_offset < 0 || y_offset < 0 || z_offset < 0
+            || x_offset + 4 > vertex_stride || y_offset + 4 > vertex_stride || z_offset + 4 > vertex_stride)) {
+        if (error_message != nullptr) {
+            *error_message = QStringLiteral("Position component offsets must fit inside the vertex stride.");
+        }
+        return false;
+    }
+
+    const quint64 vertex_bytes = vertex_layout == ModelVertexLayout::XYZTogether
+        ? static_cast<quint64>(vertex_count) * static_cast<quint64>(vertex_stride)
+        : static_cast<quint64>(vertex_count) * 12ULL;
+    if (vertex_offset + vertex_bytes > static_cast<quint64>(file_size)) {
+        if (error_message != nullptr) {
+            *error_message = QStringLiteral("Vertex buffer range exceeds the file size.");
+        }
+        return false;
+    }
+
+    if (!file.seek(static_cast<qint64>(vertex_offset))) {
+        if (error_message != nullptr) {
+            *error_message = QStringLiteral("Could not seek to the vertex buffer.");
+        }
+        return false;
+    }
+
+    const QByteArray vertex_bytes_blob = file.read(static_cast<qint64>(vertex_bytes));
+    if (vertex_bytes_blob.size() != static_cast<qint64>(vertex_bytes)) {
+        if (error_message != nullptr) {
+            *error_message = QStringLiteral("Could not read the full vertex buffer.");
+        }
+        return false;
+    }
+
+    preview->vertices.clear();
+    preview->indices.clear();
+    preview->primitive = primitive;
+    preview->vertices.reserve(vertex_count);
+    for (int index = 0; index < vertex_count; ++index) {
+        float x = 0.0f;
+        float y = 0.0f;
+        float z = 0.0f;
+        if (vertex_layout == ModelVertexLayout::XYZTogether) {
+            const int base = index * vertex_stride;
+            x = read_f32_le(vertex_bytes_blob, base + x_offset);
+            y = read_f32_le(vertex_bytes_blob, base + y_offset);
+            z = read_f32_le(vertex_bytes_blob, base + z_offset);
+        } else {
+            const int component_offset = index * 4;
+            const int y_base = vertex_count * 4;
+            const int z_base = vertex_count * 8;
+            x = read_f32_le(vertex_bytes_blob, component_offset);
+            y = read_f32_le(vertex_bytes_blob, y_base + component_offset);
+            z = read_f32_le(vertex_bytes_blob, z_base + component_offset);
+        }
+        if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
+            if (error_message != nullptr) {
+                *error_message = QStringLiteral("The selected layout produced invalid vertex positions.");
+            }
+            return false;
+        }
+        preview->vertices.push_back(QVector3D(x, y, z));
+    }
+
+    if (index_type != ModelIndexType::None && index_count > 0) {
+        const int index_size = index_type == ModelIndexType::UInt16 ? 2 : 4;
+        const quint64 total_index_bytes = static_cast<quint64>(index_count) * static_cast<quint64>(index_size);
+        if (index_offset + total_index_bytes > static_cast<quint64>(file_size)) {
+            if (error_message != nullptr) {
+                *error_message = QStringLiteral("Index buffer range exceeds the file size.");
+            }
+            return false;
+        }
+        if (!file.seek(static_cast<qint64>(index_offset))) {
+            if (error_message != nullptr) {
+                *error_message = QStringLiteral("Could not seek to the index buffer.");
+            }
+            return false;
+        }
+        const QByteArray index_bytes_blob = file.read(static_cast<qint64>(total_index_bytes));
+        if (index_bytes_blob.size() != static_cast<qint64>(total_index_bytes)) {
+            if (error_message != nullptr) {
+                *error_message = QStringLiteral("Could not read the full index buffer.");
+            }
+            return false;
+        }
+
+        preview->indices.reserve(index_count);
+        for (int i = 0; i < index_count; ++i) {
+            quint32 value = index_type == ModelIndexType::UInt16
+                ? static_cast<quint32>(read_u16_le(index_bytes_blob, i * 2))
+                : read_u32_le(index_bytes_blob, i * 4);
+            if (value >= static_cast<quint32>(vertex_count)) {
+                if (error_message != nullptr) {
+                    *error_message = QStringLiteral("The selected index buffer references vertices outside the chosen vertex count.");
+                }
+                return false;
+            }
+            preview->indices.push_back(value);
+        }
+    }
+
+    return true;
+}
+
+QVector<ModelScanCandidate> scan_model_candidates(
+    const QString& path,
+    quint64 start_offset,
+    quint64 end_offset,
+    quint64 step,
+    const std::atomic_bool& cancel_requested,
+    const std::function<void(quint64, quint64)>& progress_callback) {
+    QVector<ModelScanCandidate> results;
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return results;
+    }
+
+    const quint64 file_size = static_cast<quint64>(file.size());
+    const quint64 scan_start = qMin(start_offset, file_size);
+    const quint64 scan_end = qMin(end_offset, file_size);
+    if (scan_end <= scan_start) {
+        return results;
+    }
+
+    const QList<int> strides = {12, 16, 20, 24, 28, 32, 36};
+    constexpr int kSampleVertices = 96;
+    constexpr int kMaxVertices = 2048;
+    constexpr int kMaxCandidates = 64;
+    constexpr float kCoordinateLimit = 1000000.0f;
+
+    for (quint64 offset = scan_start; offset < scan_end && !cancel_requested.load(); offset += qMax<quint64>(4, step)) {
+        progress_callback(offset - scan_start, scan_end - scan_start);
+
+        auto try_add_candidate = [&](ModelScanCandidate candidate, const QVector3D& extent, int valid_vertices) {
+            candidate.score = valid_vertices + static_cast<int>(qMin(200.0f, extent.length() * 4.0f));
+            const quint64 candidate_vertex_bytes = candidate.vertex_layout == ModelVertexLayout::XYZTogether
+                ? static_cast<quint64>(candidate.vertex_count) * static_cast<quint64>(candidate.vertex_stride)
+                : static_cast<quint64>(candidate.vertex_count) * 12ULL;
+            const quint64 index_offset = candidate.vertex_offset + candidate_vertex_bytes;
+            if (index_offset + 18 <= file_size) {
+                if (file.seek(static_cast<qint64>(index_offset))) {
+                    const QByteArray index_probe = file.read(4096);
+                    auto try_indices = [&](ModelIndexType type, int width) {
+                        int valid = 0;
+                        const int max_indices = qMin(index_probe.size() / width, 2048);
+                        for (int i = 0; i < max_indices; ++i) {
+                            const quint32 value = type == ModelIndexType::UInt16
+                                ? static_cast<quint32>(read_u16_le(index_probe, i * width))
+                                : read_u32_le(index_probe, i * width);
+                            if (value >= static_cast<quint32>(candidate.vertex_count)) {
+                                break;
+                            }
+                            ++valid;
+                        }
+                        if (valid >= 9 && valid > candidate.index_count) {
+                            candidate.index_offset = index_offset;
+                            candidate.index_count = valid - (valid % 3);
+                            candidate.index_type = type;
+                        }
+                    };
+                    try_indices(ModelIndexType::UInt16, 2);
+                    try_indices(ModelIndexType::UInt32, 4);
+                }
+            }
+
+            bool duplicate = false;
+            for (const ModelScanCandidate& existing : std::as_const(results)) {
+                if (existing.vertex_offset == candidate.vertex_offset
+                    && existing.vertex_stride == candidate.vertex_stride
+                    && existing.vertex_layout == candidate.vertex_layout) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (duplicate) {
+                return;
+            }
+
+            results.push_back(candidate);
+            std::sort(results.begin(), results.end(), [](const ModelScanCandidate& left, const ModelScanCandidate& right) {
+                if (left.score != right.score) {
+                    return left.score > right.score;
+                }
+                return left.vertex_offset < right.vertex_offset;
+            });
+            if (results.size() > kMaxCandidates) {
+                results.resize(kMaxCandidates);
+            }
+        };
+
+        for (const int stride : strides) {
+            const quint64 sample_bytes = static_cast<quint64>(stride) * kSampleVertices;
+            if (offset + sample_bytes > file_size) {
+                continue;
+            }
+            if (!file.seek(static_cast<qint64>(offset))) {
+                continue;
+            }
+            const QByteArray sample = file.read(static_cast<qint64>(sample_bytes));
+            if (sample.size() != static_cast<qint64>(sample_bytes)) {
+                continue;
+            }
+
+            int valid_vertices = 0;
+            QVector3D min_bounds(std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
+            QVector3D max_bounds(-std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(), -std::numeric_limits<float>::max());
+            for (int i = 0; i < kSampleVertices; ++i) {
+                const int base = i * stride;
+                const float x = read_f32_le(sample, base);
+                const float y = read_f32_le(sample, base + 4);
+                const float z = read_f32_le(sample, base + 8);
+                if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
+                    break;
+                }
+                if (std::abs(x) > kCoordinateLimit || std::abs(y) > kCoordinateLimit || std::abs(z) > kCoordinateLimit) {
+                    break;
+                }
+                min_bounds.setX(qMin(min_bounds.x(), x));
+                min_bounds.setY(qMin(min_bounds.y(), y));
+                min_bounds.setZ(qMin(min_bounds.z(), z));
+                max_bounds.setX(qMax(max_bounds.x(), x));
+                max_bounds.setY(qMax(max_bounds.y(), y));
+                max_bounds.setZ(qMax(max_bounds.z(), z));
+                ++valid_vertices;
+            }
+
+            if (valid_vertices < 24) {
+                continue;
+            }
+
+            const QVector3D extent = max_bounds - min_bounds;
+            if (extent.lengthSquared() < 1e-8f) {
+                continue;
+            }
+
+            int vertex_count = valid_vertices;
+            const quint64 probe_vertices = qMin<quint64>(kMaxVertices, (file_size - offset) / static_cast<quint64>(stride));
+            if (probe_vertices > static_cast<quint64>(valid_vertices)) {
+                if (!file.seek(static_cast<qint64>(offset))) {
+                    continue;
+                }
+                const QByteArray probe = file.read(static_cast<qint64>(probe_vertices * static_cast<quint64>(stride)));
+                for (quint64 i = valid_vertices; i < probe_vertices; ++i) {
+                    const int base = static_cast<int>(i) * stride;
+                    const float x = read_f32_le(probe, base);
+                    const float y = read_f32_le(probe, base + 4);
+                    const float z = read_f32_le(probe, base + 8);
+                    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)
+                        || std::abs(x) > kCoordinateLimit
+                        || std::abs(y) > kCoordinateLimit
+                        || std::abs(z) > kCoordinateLimit) {
+                        break;
+                    }
+                    ++vertex_count;
+                }
+            }
+
+            ModelScanCandidate candidate;
+            candidate.vertex_offset = offset;
+            candidate.vertex_stride = stride;
+            candidate.vertex_count = vertex_count;
+            candidate.vertex_layout = ModelVertexLayout::XYZTogether;
+            try_add_candidate(candidate, extent, valid_vertices);
+        }
+
+        const quint64 planar_sample_bytes = static_cast<quint64>(kSampleVertices) * 12ULL;
+        if (offset + planar_sample_bytes <= file_size) {
+            if (file.seek(static_cast<qint64>(offset))) {
+                const QByteArray sample = file.read(static_cast<qint64>(planar_sample_bytes));
+                if (sample.size() == static_cast<qint64>(planar_sample_bytes)) {
+                    int valid_vertices = 0;
+                    QVector3D min_bounds(std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
+                    QVector3D max_bounds(-std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(), -std::numeric_limits<float>::max());
+                    const int y_base = kSampleVertices * 4;
+                    const int z_base = kSampleVertices * 8;
+                    for (int i = 0; i < kSampleVertices; ++i) {
+                        const int base = i * 4;
+                        const float x = read_f32_le(sample, base);
+                        const float y = read_f32_le(sample, y_base + base);
+                        const float z = read_f32_le(sample, z_base + base);
+                        if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
+                            break;
+                        }
+                        if (std::abs(x) > kCoordinateLimit || std::abs(y) > kCoordinateLimit || std::abs(z) > kCoordinateLimit) {
+                            break;
+                        }
+                        min_bounds.setX(qMin(min_bounds.x(), x));
+                        min_bounds.setY(qMin(min_bounds.y(), y));
+                        min_bounds.setZ(qMin(min_bounds.z(), z));
+                        max_bounds.setX(qMax(max_bounds.x(), x));
+                        max_bounds.setY(qMax(max_bounds.y(), y));
+                        max_bounds.setZ(qMax(max_bounds.z(), z));
+                        ++valid_vertices;
+                    }
+
+                    if (valid_vertices >= 24) {
+                        const QVector3D extent = max_bounds - min_bounds;
+                        if (extent.lengthSquared() >= 1e-8f) {
+                            int vertex_count = valid_vertices;
+                            const quint64 probe_vertices = qMin<quint64>(kMaxVertices, (file_size - offset) / 12ULL);
+                            if (probe_vertices > static_cast<quint64>(valid_vertices)) {
+                                if (file.seek(static_cast<qint64>(offset))) {
+                                    const QByteArray probe = file.read(static_cast<qint64>(probe_vertices * 12ULL));
+                                    const int probe_y_base = static_cast<int>(probe_vertices * 4ULL);
+                                    const int probe_z_base = static_cast<int>(probe_vertices * 8ULL);
+                                    for (quint64 i = valid_vertices; i < probe_vertices; ++i) {
+                                        const int base = static_cast<int>(i) * 4;
+                                        const float x = read_f32_le(probe, base);
+                                        const float y = read_f32_le(probe, probe_y_base + base);
+                                        const float z = read_f32_le(probe, probe_z_base + base);
+                                        if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)
+                                            || std::abs(x) > kCoordinateLimit
+                                            || std::abs(y) > kCoordinateLimit
+                                            || std::abs(z) > kCoordinateLimit) {
+                                            break;
+                                        }
+                                        ++vertex_count;
+                                    }
+                                }
+                            }
+
+                            ModelScanCandidate candidate;
+                            candidate.vertex_offset = offset;
+                            candidate.vertex_stride = 4;
+                            candidate.vertex_count = vertex_count;
+                            candidate.vertex_layout = ModelVertexLayout::XYZBlocks;
+                            try_add_candidate(candidate, extent, valid_vertices);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    progress_callback(scan_end - scan_start, scan_end - scan_start);
+    return results;
+}
+
+class ModelPreviewWidget final : public QWidget {
+public:
+    explicit ModelPreviewWidget(QWidget* parent = nullptr) : QWidget(parent) {
+        setMinimumSize(420, 320);
+        setMouseTracking(true);
+    }
+
+    void set_model(const ParsedModelPreview& model) {
+        model_ = model;
+        update();
+    }
+
+protected:
+    void paintEvent(QPaintEvent* event) override {
+        Q_UNUSED(event);
+
+        QPainter painter(this);
+        painter.fillRect(rect(), QColor(245, 247, 250));
+        painter.setRenderHint(QPainter::Antialiasing, true);
+
+        if (model_.vertices.isEmpty()) {
+            painter.setPen(QColor(70, 82, 98));
+            painter.drawText(rect().adjusted(24, 24, -24, -24),
+                Qt::AlignCenter,
+                QStringLiteral("Load or scan a candidate buffer to preview geometry."));
+            return;
+        }
+
+        QVector3D min_bounds(std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
+        QVector3D max_bounds(-std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(), -std::numeric_limits<float>::max());
+        for (const QVector3D& vertex : model_.vertices) {
+            min_bounds.setX(qMin(min_bounds.x(), vertex.x()));
+            min_bounds.setY(qMin(min_bounds.y(), vertex.y()));
+            min_bounds.setZ(qMin(min_bounds.z(), vertex.z()));
+            max_bounds.setX(qMax(max_bounds.x(), vertex.x()));
+            max_bounds.setY(qMax(max_bounds.y(), vertex.y()));
+            max_bounds.setZ(qMax(max_bounds.z(), vertex.z()));
+        }
+
+        const QVector3D center = (min_bounds + max_bounds) * 0.5f;
+        const QVector3D extent = max_bounds - min_bounds;
+        const float radius = qMax(1e-3f, extent.length() * 0.5f);
+
+        QMatrix4x4 transform;
+        transform.rotate(pitch_, 1.0f, 0.0f, 0.0f);
+        transform.rotate(yaw_, 0.0f, 1.0f, 0.0f);
+
+        QVector<QPointF> projected;
+        projected.reserve(model_.vertices.size());
+        const float scale = (qMin(width(), height()) * 0.42f * zoom_) / radius;
+        for (const QVector3D& vertex : model_.vertices) {
+            QVector3D transformed = transform.map(vertex - center);
+            const float depth = 1.0f / qMax(0.2f, 3.0f - transformed.z() / radius);
+            const QPointF point(
+                width() * 0.5 + transformed.x() * scale * depth,
+                height() * 0.5 - transformed.y() * scale * depth);
+            projected.push_back(point);
+        }
+
+        painter.setPen(QPen(QColor(190, 198, 210), 1));
+        painter.drawRect(rect().adjusted(10, 10, -10, -10));
+
+        if (model_.primitive == ModelPrimitiveMode::Points) {
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(QColor(46, 109, 180));
+            for (const QPointF& point : std::as_const(projected)) {
+                painter.drawEllipse(point, 2.2, 2.2);
+            }
+            return;
+        }
+
+        painter.setPen(QPen(QColor(46, 109, 180), 1.1));
+        auto draw_segment = [&](quint32 a, quint32 b) {
+            if (a < static_cast<quint32>(projected.size()) && b < static_cast<quint32>(projected.size())) {
+                painter.drawLine(projected.at(static_cast<int>(a)), projected.at(static_cast<int>(b)));
+            }
+        };
+
+        if (!model_.indices.isEmpty()) {
+            if (model_.primitive == ModelPrimitiveMode::Lines) {
+                for (int i = 0; i + 1 < model_.indices.size(); i += 2) {
+                    draw_segment(model_.indices.at(i), model_.indices.at(i + 1));
+                }
+            } else {
+                for (int i = 0; i + 2 < model_.indices.size(); i += 3) {
+                    draw_segment(model_.indices.at(i), model_.indices.at(i + 1));
+                    draw_segment(model_.indices.at(i + 1), model_.indices.at(i + 2));
+                    draw_segment(model_.indices.at(i + 2), model_.indices.at(i));
+                }
+            }
+        } else {
+            if (model_.primitive == ModelPrimitiveMode::Lines) {
+                for (int i = 0; i + 1 < projected.size(); i += 2) {
+                    painter.drawLine(projected.at(i), projected.at(i + 1));
+                }
+            } else {
+                for (int i = 0; i + 2 < projected.size(); i += 3) {
+                    painter.drawLine(projected.at(i), projected.at(i + 1));
+                    painter.drawLine(projected.at(i + 1), projected.at(i + 2));
+                    painter.drawLine(projected.at(i + 2), projected.at(i));
+                }
+            }
+        }
+    }
+
+    void mousePressEvent(QMouseEvent* event) override {
+        if (event->button() == Qt::LeftButton) {
+            last_drag_position_ = event->pos();
+            event->accept();
+            return;
+        }
+        QWidget::mousePressEvent(event);
+    }
+
+    void mouseMoveEvent(QMouseEvent* event) override {
+        if (!(event->buttons() & Qt::LeftButton)) {
+            QWidget::mouseMoveEvent(event);
+            return;
+        }
+        const QPoint delta = event->pos() - last_drag_position_;
+        yaw_ += delta.x() * 0.6f;
+        pitch_ = qBound(-89.0f, pitch_ + delta.y() * 0.6f, 89.0f);
+        last_drag_position_ = event->pos();
+        update();
+    }
+
+    void wheelEvent(QWheelEvent* event) override {
+        const qreal angle = event->angleDelta().y() / 120.0;
+        zoom_ = qBound(0.2f, zoom_ * (angle > 0 ? 1.1f : 0.9f), 8.0f);
+        update();
+        event->accept();
+    }
+
+private:
+    ParsedModelPreview model_;
+    float yaw_ = 24.0f;
+    float pitch_ = -18.0f;
+    float zoom_ = 1.0f;
+    QPoint last_drag_position_;
 };
 
 class SchemaCodeEditor final : public QPlainTextEdit {
@@ -1859,6 +2488,396 @@ private:
     bool sync_guard_ = false;
 };
 
+class ModelExplorerDialog final : public QDialog {
+public:
+    explicit ModelExplorerDialog(HexView* hex_view, QWidget* parent = nullptr)
+        : QDialog(parent), hex_view_(hex_view) {
+        setWindowTitle(QStringLiteral("3D Buffer Explorer"));
+        resize(1360, 880);
+
+        auto* root = new QVBoxLayout(this);
+        auto* top_bar = new QHBoxLayout();
+        file_label_ = new QLabel(QStringLiteral("Current file: none"), this);
+        auto* jump_button = new QPushButton(QStringLiteral("Go To Vertex Offset"), this);
+        top_bar->addWidget(file_label_, 1);
+        top_bar->addWidget(jump_button);
+        root->addLayout(top_bar);
+
+        auto* main_splitter = new QSplitter(Qt::Horizontal, this);
+        root->addWidget(main_splitter, 1);
+
+        auto* left_panel = new QWidget(main_splitter);
+        auto* left_layout = new QVBoxLayout(left_panel);
+        left_layout->setContentsMargins(0, 0, 0, 0);
+
+        auto* manual_box = new QGroupBox(QStringLiteral("Manual Interpretation"), left_panel);
+        auto* manual_form = new QFormLayout(manual_box);
+        layout_combo_ = new QComboBox(manual_box);
+        layout_combo_->addItem(QStringLiteral("XYZ together"), static_cast<int>(ModelVertexLayout::XYZTogether));
+        layout_combo_->addItem(QStringLiteral("X block, Y block, Z block"), static_cast<int>(ModelVertexLayout::XYZBlocks));
+        vertex_offset_edit_ = new QLineEdit(QStringLiteral("0x0"), manual_box);
+        vertex_count_spin_ = new QSpinBox(manual_box);
+        vertex_count_spin_->setRange(1, 100000000);
+        vertex_count_spin_->setValue(512);
+        vertex_stride_spin_ = new QSpinBox(manual_box);
+        vertex_stride_spin_->setRange(12, 512);
+        vertex_stride_spin_->setValue(12);
+        x_offset_spin_ = new QSpinBox(manual_box);
+        y_offset_spin_ = new QSpinBox(manual_box);
+        z_offset_spin_ = new QSpinBox(manual_box);
+        for (QSpinBox* spin : {x_offset_spin_, y_offset_spin_, z_offset_spin_}) {
+            spin->setRange(0, 508);
+        }
+        x_offset_spin_->setValue(0);
+        y_offset_spin_->setValue(4);
+        z_offset_spin_->setValue(8);
+        index_offset_edit_ = new QLineEdit(QStringLiteral("0x0"), manual_box);
+        index_count_spin_ = new QSpinBox(manual_box);
+        index_count_spin_->setRange(0, 100000000);
+        index_type_combo_ = new QComboBox(manual_box);
+        index_type_combo_->addItem(QStringLiteral("None"), static_cast<int>(ModelIndexType::None));
+        index_type_combo_->addItem(QStringLiteral("u16"), static_cast<int>(ModelIndexType::UInt16));
+        index_type_combo_->addItem(QStringLiteral("u32"), static_cast<int>(ModelIndexType::UInt32));
+        primitive_combo_ = new QComboBox(manual_box);
+        primitive_combo_->addItem(QStringLiteral("Triangles"), static_cast<int>(ModelPrimitiveMode::Triangles));
+        primitive_combo_->addItem(QStringLiteral("Lines"), static_cast<int>(ModelPrimitiveMode::Lines));
+        primitive_combo_->addItem(QStringLiteral("Points"), static_cast<int>(ModelPrimitiveMode::Points));
+        auto* preview_button = new QPushButton(QStringLiteral("Preview Layout"), manual_box);
+        manual_form->addRow(QStringLiteral("Layout"), layout_combo_);
+        manual_form->addRow(QStringLiteral("Vertex offset"), vertex_offset_edit_);
+        manual_form->addRow(QStringLiteral("Vertex count"), vertex_count_spin_);
+        manual_form->addRow(QStringLiteral("Vertex stride"), vertex_stride_spin_);
+        manual_form->addRow(QStringLiteral("Position X offset"), x_offset_spin_);
+        manual_form->addRow(QStringLiteral("Position Y offset"), y_offset_spin_);
+        manual_form->addRow(QStringLiteral("Position Z offset"), z_offset_spin_);
+        manual_form->addRow(QStringLiteral("Index offset"), index_offset_edit_);
+        manual_form->addRow(QStringLiteral("Index count"), index_count_spin_);
+        manual_form->addRow(QStringLiteral("Index type"), index_type_combo_);
+        manual_form->addRow(QStringLiteral("Primitive"), primitive_combo_);
+        manual_form->addRow(QString(), preview_button);
+        left_layout->addWidget(manual_box);
+
+        auto* scan_box = new QGroupBox(QStringLiteral("Auto Detect"), left_panel);
+        auto* scan_form = new QFormLayout(scan_box);
+        scan_start_edit_ = new QLineEdit(QStringLiteral("0x0"), scan_box);
+        scan_end_edit_ = new QLineEdit(QStringLiteral("0x4000000"), scan_box);
+        scan_step_spin_ = new QSpinBox(scan_box);
+        scan_step_spin_->setRange(4, 1 << 20);
+        scan_step_spin_->setSingleStep(4);
+        scan_step_spin_->setValue(256);
+        auto* scan_button = new QPushButton(QStringLiteral("Scan For Mesh Candidates"), scan_box);
+        scan_form->addRow(QStringLiteral("Scan start"), scan_start_edit_);
+        scan_form->addRow(QStringLiteral("Scan end"), scan_end_edit_);
+        scan_form->addRow(QStringLiteral("Scan step"), scan_step_spin_);
+        scan_form->addRow(QString(), scan_button);
+        left_layout->addWidget(scan_box);
+
+        candidates_table_ = new QTableWidget(0, 8, left_panel);
+        candidates_table_->setHorizontalHeaderLabels({
+            QStringLiteral("Vertex Offset"),
+            QStringLiteral("Layout"),
+            QStringLiteral("Stride"),
+            QStringLiteral("Vertices"),
+            QStringLiteral("Score"),
+            QStringLiteral("Index Offset"),
+            QStringLiteral("Index Type"),
+            QStringLiteral("Indices")
+        });
+        candidates_table_->setSelectionBehavior(QAbstractItemView::SelectRows);
+        candidates_table_->setSelectionMode(QAbstractItemView::SingleSelection);
+        candidates_table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+        candidates_table_->horizontalHeader()->setStretchLastSection(true);
+        left_layout->addWidget(candidates_table_, 1);
+
+        auto* right_panel = new QWidget(main_splitter);
+        auto* right_layout = new QVBoxLayout(right_panel);
+        right_layout->setContentsMargins(0, 0, 0, 0);
+        preview_summary_label_ = new QLabel(QStringLiteral("Preview a manual layout or select a scanned candidate."), right_panel);
+        preview_widget_ = new ModelPreviewWidget(right_panel);
+        right_layout->addWidget(preview_summary_label_);
+        right_layout->addWidget(preview_widget_, 1);
+
+        main_splitter->setStretchFactor(0, 0);
+        main_splitter->setStretchFactor(1, 1);
+        main_splitter->setSizes({430, 900});
+
+        status_label_ = new QLabel(QStringLiteral("Ready."), this);
+        status_label_->setWordWrap(true);
+        root->addWidget(status_label_);
+
+        connect(jump_button, &QPushButton::clicked, this, [this]() { jump_to_vertex_offset(); });
+        connect(preview_button, &QPushButton::clicked, this, [this]() { preview_current_layout(); });
+        connect(scan_button, &QPushButton::clicked, this, [this]() { run_scan(); });
+        connect(layout_combo_, &QComboBox::currentIndexChanged, this, [this]() { update_layout_controls(); });
+        connect(candidates_table_, &QTableWidget::cellDoubleClicked, this, [this](int row, int) { apply_candidate(row, true); });
+        connect(candidates_table_, &QTableWidget::itemSelectionChanged, this, [this]() {
+            const int row = candidates_table_->currentRow();
+            if (row >= 0) {
+                apply_candidate(row, false);
+            }
+        });
+
+        update_layout_controls();
+        load_current_file();
+    }
+
+    void refresh_from_current_file() {
+        load_current_file(true);
+    }
+
+private:
+    void set_status(const QString& text, bool error = false) {
+        status_label_->setText(text);
+        status_label_->setStyleSheet(error ? QStringLiteral("color: #8b1e1e;") : QString());
+    }
+
+    void clear_file_specific_state() {
+        vertex_offset_edit_->setText(QStringLiteral("0x0"));
+        vertex_count_spin_->setValue(512);
+        index_offset_edit_->setText(QStringLiteral("0x0"));
+        index_count_spin_->setValue(0);
+        candidates_.clear();
+        candidates_table_->setRowCount(0);
+        preview_widget_->set_model(ParsedModelPreview{});
+        preview_summary_label_->setText(QStringLiteral("Preview a manual layout or select a scanned candidate."));
+    }
+
+    void load_current_file(bool from_refresh = false) {
+        if (hex_view_ == nullptr || !hex_view_->has_document() || hex_view_->document_path().isEmpty()) {
+            current_file_path_.clear();
+            file_label_->setText(QStringLiteral("Current file: none"));
+            clear_file_specific_state();
+            set_status(QStringLiteral("Open a file in the main editor first."), true);
+            return;
+        }
+
+        const QString next_path = hex_view_->document_path();
+        const bool changed = current_file_path_ != next_path;
+        current_file_path_ = next_path;
+        const QFileInfo info(current_file_path_);
+        file_label_->setText(QStringLiteral("Current file: %1 (%2 bytes)").arg(info.fileName()).arg(info.size()));
+        if (changed || from_refresh) {
+            clear_file_specific_state();
+            scan_start_edit_->setText(QStringLiteral("0x0"));
+            scan_end_edit_->setText(format_model_offset(static_cast<quint64>(qMin<qint64>(info.size(), 64LL * 1024 * 1024))));
+            set_status(
+                changed
+                    ? QStringLiteral("Source file changed to %1. Preview and scan results were cleared.").arg(info.fileName())
+                    : QStringLiteral("Loaded %1. Adjust a layout or run a heuristic scan.").arg(info.fileName()));
+        } else {
+            set_status(QStringLiteral("Loaded %1. Adjust a layout or run a heuristic scan.").arg(info.fileName()));
+        }
+    }
+
+    void jump_to_vertex_offset() {
+        if (hex_view_ == nullptr || current_file_path_.isEmpty()) {
+            return;
+        }
+        quint64 offset = 0;
+        if (!parse_model_offset(vertex_offset_edit_->text(), &offset)) {
+            set_status(QStringLiteral("Enter a valid vertex offset."), true);
+            return;
+        }
+        hex_view_->go_to_offset(static_cast<qint64>(qMin<quint64>(offset, static_cast<quint64>(qMax<qint64>(0, hex_view_->document_size() - 1)))));
+    }
+
+    void preview_current_layout() {
+        if (current_file_path_.isEmpty()) {
+            set_status(QStringLiteral("Open a file in the main editor first."), true);
+            return;
+        }
+
+        quint64 vertex_offset = 0;
+        quint64 index_offset = 0;
+        if (!parse_model_offset(vertex_offset_edit_->text(), &vertex_offset) || !parse_model_offset(index_offset_edit_->text(), &index_offset)) {
+            set_status(QStringLiteral("Enter valid vertex and index offsets."), true);
+            return;
+        }
+
+        ParsedModelPreview preview;
+        QString error;
+        if (!load_model_preview(
+                current_file_path_,
+                vertex_offset,
+                vertex_count_spin_->value(),
+                static_cast<ModelVertexLayout>(layout_combo_->currentData().toInt()),
+                vertex_stride_spin_->value(),
+                x_offset_spin_->value(),
+                y_offset_spin_->value(),
+                z_offset_spin_->value(),
+                index_offset,
+                index_count_spin_->value(),
+                static_cast<ModelIndexType>(index_type_combo_->currentData().toInt()),
+                static_cast<ModelPrimitiveMode>(primitive_combo_->currentData().toInt()),
+                &preview,
+                &error)) {
+            set_status(error, true);
+            return;
+        }
+
+        preview_widget_->set_model(preview);
+        preview_summary_label_->setText(QStringLiteral("%1 vertices, %2 indices, %3")
+                                            .arg(preview.vertices.size())
+                                            .arg(preview.indices.size())
+                                            .arg(model_vertex_layout_label(static_cast<ModelVertexLayout>(layout_combo_->currentData().toInt()))));
+        set_status(QStringLiteral("Preview updated."));
+    }
+
+    void populate_candidates(const QVector<ModelScanCandidate>& candidates) {
+        candidates_ = candidates;
+        candidates_table_->setRowCount(candidates.size());
+        for (int row = 0; row < candidates.size(); ++row) {
+            const ModelScanCandidate& candidate = candidates.at(row);
+            auto set_item = [&](int column, const QString& text) {
+                auto* item = new QTableWidgetItem(text);
+                candidates_table_->setItem(row, column, item);
+            };
+            set_item(0, format_model_offset(candidate.vertex_offset));
+            set_item(1, model_vertex_layout_label(candidate.vertex_layout));
+            set_item(2, candidate.vertex_layout == ModelVertexLayout::XYZTogether ? QString::number(candidate.vertex_stride) : QStringLiteral("-"));
+            set_item(3, QString::number(candidate.vertex_count));
+            set_item(4, QString::number(candidate.score));
+            set_item(5, candidate.index_type == ModelIndexType::None ? QStringLiteral("-") : format_model_offset(candidate.index_offset));
+            set_item(6, model_index_type_label(candidate.index_type));
+            set_item(7, candidate.index_count > 0 ? QString::number(candidate.index_count) : QStringLiteral("-"));
+        }
+        if (!candidates.isEmpty()) {
+            candidates_table_->selectRow(0);
+            apply_candidate(0, false);
+        }
+    }
+
+    void apply_candidate(int row, bool preview_now) {
+        if (row < 0 || row >= candidates_.size()) {
+            return;
+        }
+        const ModelScanCandidate& candidate = candidates_.at(row);
+        vertex_offset_edit_->setText(format_model_offset(candidate.vertex_offset));
+        layout_combo_->setCurrentIndex(layout_combo_->findData(static_cast<int>(candidate.vertex_layout)));
+        vertex_stride_spin_->setValue(candidate.vertex_stride);
+        vertex_count_spin_->setValue(candidate.vertex_count);
+        x_offset_spin_->setValue(0);
+        y_offset_spin_->setValue(4);
+        z_offset_spin_->setValue(8);
+        if (candidate.index_type == ModelIndexType::None) {
+            index_offset_edit_->setText(QStringLiteral("0x0"));
+            index_count_spin_->setValue(0);
+            index_type_combo_->setCurrentIndex(index_type_combo_->findData(static_cast<int>(ModelIndexType::None)));
+        } else {
+            index_offset_edit_->setText(format_model_offset(candidate.index_offset));
+            index_count_spin_->setValue(candidate.index_count);
+            index_type_combo_->setCurrentIndex(index_type_combo_->findData(static_cast<int>(candidate.index_type)));
+        }
+        primitive_combo_->setCurrentIndex(primitive_combo_->findData(static_cast<int>(ModelPrimitiveMode::Triangles)));
+        if (preview_now) {
+            preview_current_layout();
+        }
+    }
+
+    void update_layout_controls() {
+        const ModelVertexLayout layout = static_cast<ModelVertexLayout>(layout_combo_->currentData().toInt());
+        const bool interleaved = layout == ModelVertexLayout::XYZTogether;
+        vertex_stride_spin_->setEnabled(interleaved);
+        x_offset_spin_->setEnabled(interleaved);
+        y_offset_spin_->setEnabled(interleaved);
+        z_offset_spin_->setEnabled(interleaved);
+        if (!interleaved) {
+            set_status(QStringLiteral("Layout uses three float blocks: all X values, then all Y values, then all Z values."), false);
+        }
+    }
+
+    void run_scan() {
+        if (current_file_path_.isEmpty()) {
+            set_status(QStringLiteral("Open a file in the main editor first."), true);
+            return;
+        }
+
+        quint64 start_offset = 0;
+        quint64 end_offset = 0;
+        if (!parse_model_offset(scan_start_edit_->text(), &start_offset) || !parse_model_offset(scan_end_edit_->text(), &end_offset) || end_offset <= start_offset) {
+            set_status(QStringLiteral("Enter a valid scan range."), true);
+            return;
+        }
+
+        QProgressDialog progress_dialog(QStringLiteral("Scanning for candidate vertex/index buffers..."), QStringLiteral("Cancel"), 0, 1000, this);
+        progress_dialog.setWindowTitle(QStringLiteral("3D Buffer Explorer"));
+        progress_dialog.setMinimumWidth(460);
+        progress_dialog.setWindowModality(Qt::WindowModal);
+        progress_dialog.show();
+
+        std::atomic_bool cancel_requested{false};
+        connect(&progress_dialog, &QProgressDialog::canceled, this, [&cancel_requested]() {
+            cancel_requested.store(true, std::memory_order_relaxed);
+        });
+
+        QFutureWatcher<ModelScanResult> watcher;
+        QEventLoop loop;
+        connect(&watcher, &QFutureWatcher<ModelScanResult>::finished, &loop, &QEventLoop::quit);
+        QPointer<QProgressDialog> dialog_ptr(&progress_dialog);
+        watcher.setFuture(QtConcurrent::run([=, &cancel_requested]() -> ModelScanResult {
+            ModelScanResult result;
+            result.ok = true;
+            result.candidates = scan_model_candidates(
+                current_file_path_,
+                start_offset,
+                end_offset,
+                static_cast<quint64>(scan_step_spin_->value()),
+                cancel_requested,
+                [dialog_ptr](quint64 completed, quint64 total) {
+                    if (!dialog_ptr) {
+                        return;
+                    }
+                    QMetaObject::invokeMethod(dialog_ptr.data(), [dialog_ptr, completed, total]() {
+                        if (!dialog_ptr) {
+                            return;
+                        }
+                        dialog_ptr->setValue(total > 0 ? static_cast<int>((completed * 1000) / total) : 1000);
+                        dialog_ptr->setLabelText(QStringLiteral("Scanning %1 of %2")
+                                                     .arg(format_model_offset(completed))
+                                                     .arg(format_model_offset(total)));
+                    }, Qt::QueuedConnection);
+                });
+            result.canceled = cancel_requested.load(std::memory_order_relaxed);
+            return result;
+        }));
+
+        loop.exec();
+        progress_dialog.setValue(1000);
+        const ModelScanResult result = watcher.result();
+        if (!result.ok) {
+            set_status(result.error.isEmpty() ? QStringLiteral("Scan failed.") : result.error, true);
+            return;
+        }
+        populate_candidates(result.candidates);
+        set_status(result.canceled
+                ? QStringLiteral("Scan canceled. Partial candidates are shown.")
+                : QStringLiteral("Found %1 candidate layout(s).").arg(result.candidates.size()));
+    }
+
+    HexView* hex_view_ = nullptr;
+    QString current_file_path_;
+    QLabel* file_label_ = nullptr;
+    QComboBox* layout_combo_ = nullptr;
+    QLineEdit* vertex_offset_edit_ = nullptr;
+    QSpinBox* vertex_count_spin_ = nullptr;
+    QSpinBox* vertex_stride_spin_ = nullptr;
+    QSpinBox* x_offset_spin_ = nullptr;
+    QSpinBox* y_offset_spin_ = nullptr;
+    QSpinBox* z_offset_spin_ = nullptr;
+    QLineEdit* index_offset_edit_ = nullptr;
+    QSpinBox* index_count_spin_ = nullptr;
+    QComboBox* index_type_combo_ = nullptr;
+    QComboBox* primitive_combo_ = nullptr;
+    QLineEdit* scan_start_edit_ = nullptr;
+    QLineEdit* scan_end_edit_ = nullptr;
+    QSpinBox* scan_step_spin_ = nullptr;
+    QTableWidget* candidates_table_ = nullptr;
+    ModelPreviewWidget* preview_widget_ = nullptr;
+    QLabel* preview_summary_label_ = nullptr;
+    QLabel* status_label_ = nullptr;
+    QVector<ModelScanCandidate> candidates_;
+};
+
 }
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
@@ -1983,6 +3002,8 @@ void MainWindow::setup_menu() {
     connect(schema_tool_action_, &QAction::triggered, this, &MainWindow::open_schema_tool);
     compare_tool_action_ = tools_menu->addAction("&Compare Files...");
     connect(compare_tool_action_, &QAction::triggered, this, &MainWindow::open_compare_tool);
+    model_explorer_tool_action_ = tools_menu->addAction("&3D Buffer Explorer...");
+    connect(model_explorer_tool_action_, &QAction::triggered, this, &MainWindow::open_model_explorer_tool);
     compute_hashes_action_ = tools_menu->addAction("Co&mpute Hashes");
     connect(compute_hashes_action_, &QAction::triggered, this, &MainWindow::compute_hashes);
     settings_action_ = tools_menu->addAction("&Settings...");
@@ -2736,6 +3757,13 @@ void MainWindow::setup_central_widget() {
     connect(hex_view_, &HexView::insert_bytes_requested, this, [this](qulonglong offset) {
         insert_bytes_at(static_cast<qint64>(offset));
     });
+    connect(hex_view_, &HexView::document_loaded, this, [this](const QString&, qulonglong) {
+        if (model_explorer_dialog_ != nullptr) {
+            if (auto* dialog = dynamic_cast<ModelExplorerDialog*>(model_explorer_dialog_)) {
+                dialog->refresh_from_current_file();
+            }
+        }
+    });
     connect(hex_view_, &HexView::inspector_changed, this, [this](const QString& text) {
         update_inspector_view(text);
     });
@@ -3196,6 +4224,17 @@ void MainWindow::open_compare_tool() {
     compare_tool_dialog_->show();
     compare_tool_dialog_->raise();
     compare_tool_dialog_->activateWindow();
+}
+
+void MainWindow::open_model_explorer_tool() {
+    if (model_explorer_dialog_ == nullptr) {
+        auto* dialog = new ModelExplorerDialog(hex_view_, this);
+        dialog->setAttribute(Qt::WA_DeleteOnClose, false);
+        model_explorer_dialog_ = dialog;
+    }
+    model_explorer_dialog_->show();
+    model_explorer_dialog_->raise();
+    model_explorer_dialog_->activateWindow();
 }
 
 void MainWindow::open_settings() {

@@ -19,8 +19,10 @@ Already in place:
 - configurable viewport layout with persisted view state
 - recent files, settings, session restore, and About dialog
 - unified versioning and GitHub release infrastructure
-- schema editor tool window with structure parsing, progress, and coverage reporting
+- schema editor tool window with structure parsing, progress, coverage reporting, JSON export, and staged repeat blocks
 - compare tool window with side-by-side views, results, progress, and diff navigation
+- insert-bytes workflow with EOF append behavior and context-menu insertion
+- 3D Buffer Explorer tool window for raw geometry inspection and heuristic scanning
 
 ## Near-Term Priorities
 
@@ -93,10 +95,10 @@ Exit criteria:
 Possible future features after the 1.x stability work:
 
 - aligned binary diff with insert/delete-aware compare
-- export parsed schema structures to JSON or similar interchange formats
 - entropy and histogram views
 - annotations
 - richer schema tooling or visual structure builders
+- stronger 3D buffer heuristics and richer preview modes
 - scripting or plugin hooks
 
 These remain optional product-expansion work, not prerequisites for cleaning up the current release line.
