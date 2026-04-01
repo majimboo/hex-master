@@ -8,6 +8,22 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 - No released changes yet.
 
+## [1.0.1] - 2026-04-02
+
+### Added
+
+- Search and replace history with remembered mode, action, and selection options
+- Tabbed search and replace result sets that keep previous runs available
+- Search progress for `Find Next`, `Find Previous`, and `Find All`
+- Replace progress for `Replace Next` and `Replace All`
+- Technical README notes describing the large-file handling approach
+
+### Changed
+
+- Search progress reporting now advances smoothly on large files
+- Replace operations now show result tables with replaced offsets, including partial results after canceling `Replace All`
+- Large-file save and backup progress reporting was refined for better responsiveness on multi-GB writes
+
 ## [1.0.0] - 2026-04-01
 
 ### Added
@@ -44,5 +60,6 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 - GitHub CI, release automation, and Pages deployment added
 - README, build docs, release docs, and license added for public release readiness
 
-[Unreleased]: https://github.com/majimboo/hex-master/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/majimboo/hex-master/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/majimboo/hex-master/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/majimboo/hex-master/releases/tag/v1.0.0
