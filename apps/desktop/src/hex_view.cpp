@@ -1,11 +1,15 @@
 #include "hex_view.hpp"
 
 #include <QFontDatabase>
+#include <QApplication>
+#include <QClipboard>
+#include <QContextMenuEvent>
 #include <QDateTime>
 #include <QCryptographicHash>
 #include <QColor>
 #include <QEvent>
 #include <QKeyEvent>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QScrollBar>
@@ -327,11 +331,15 @@ QString HexView::selected_text_text() const {
 }
 
 bool HexView::insert_at_caret(const QByteArray& bytes) {
+    return insert_at_offset(caret_offset_, bytes);
+}
+
+bool HexView::insert_at_offset(qint64 offset, const QByteArray& bytes) {
     if (!has_document() || is_read_only() || bytes.isEmpty()) {
         return false;
     }
 
-    qint64 start = caret_offset_;
+    qint64 start = qBound<qint64>(0, offset, document_size());
     if (has_selection()) {
         start = selection_start();
         if (!source_.delete_range(start, selection_size())) {
@@ -1321,8 +1329,13 @@ void HexView::paintEvent(QPaintEvent* event) {
     for (int row = 0; row < cached_rows_.size(); ++row) {
         const CachedRow& cached_row = cached_rows_.at(row);
         const int y = metrics_.row_header + row * metrics_.line_height;
-        const bool current_row = caret_offset_ >= cached_row.row_offset &&
-            caret_offset_ < cached_row.row_offset + cached_row.bytes.size();
+        const bool append_caret_row =
+            edit_mode_ == EditMode::Insert &&
+            caret_offset_ == document_size() &&
+            cached_row.row_offset + cached_row.bytes.size() == document_size() &&
+            cached_row.bytes.size() < bytes_per_row_;
+        const bool current_row = (caret_offset_ >= cached_row.row_offset &&
+            caret_offset_ < cached_row.row_offset + cached_row.bytes.size()) || append_caret_row;
         if (current_row) {
             painter.fillRect(QRect(metrics_.hex_start - 6, y, viewport()->width() - (metrics_.hex_start - 6), metrics_.line_height), current_row_fill);
         }
@@ -1389,6 +1402,14 @@ void HexView::paintEvent(QPaintEvent* event) {
             painter.setPen((selected || is_caret) ? selection_text_color : text_color);
             painter.drawText(hex_rect, Qt::AlignCenter, hex_byte(value));
             painter.drawText(ascii_rect, Qt::AlignCenter, QString(cached_row.ascii_text.at(column)));
+        }
+
+        if (append_caret_row) {
+            const int append_column = cached_row.bytes.size();
+            const QRect hex_rect = hex_cell_rect(row, append_column);
+            const QRect ascii_rect = ascii_cell_rect(row, append_column);
+            painter.fillRect(hex_rect.adjusted(1, 1, -1, -1), caret_fill);
+            painter.fillRect(ascii_rect.adjusted(1, 1, -1, -1), caret_fill);
         }
 
         painter.fillRect(QRect(metrics_.hex_start - 6, y + metrics_.line_height - 1, viewport()->width() - (metrics_.hex_start - 6), 1), QColor(236, 240, 245));
@@ -1570,6 +1591,38 @@ void HexView::mouseReleaseEvent(QMouseEvent* event) {
     }
 
     QAbstractScrollArea::mouseReleaseEvent(event);
+}
+
+void HexView::contextMenuEvent(QContextMenuEvent* event) {
+    if (!has_document() || event->pos().y() <= metrics_.row_header) {
+        QAbstractScrollArea::contextMenuEvent(event);
+        return;
+    }
+
+    const ActivePane pane = pane_at(event->pos());
+    if (event->pos().x() < metrics_.hex_start || (pane == ActivePane::Hex && event->pos().x() >= metrics_.ascii_start && metrics_.ascii_start > metrics_.hex_start)) {
+        QAbstractScrollArea::contextMenuEvent(event);
+        return;
+    }
+
+    const qint64 clicked = offset_at(event->pos());
+    active_pane_ = pane;
+    high_nibble_pending_ = true;
+    move_caret(clicked, false);
+
+    const QString offset_text = QStringLiteral("0x%1").arg(formatted_offset(qMin(clicked, qMax<qint64>(0, document_size() - 1))));
+    QMenu menu(this);
+    QAction* copy_offset_action = menu.addAction(QStringLiteral("Copy Offset"));
+    QAction* insert_bytes_action = nullptr;
+    if (!is_read_only()) {
+        insert_bytes_action = menu.addAction(QStringLiteral("Insert Bytes After..."));
+    }
+    QAction* selected_action = menu.exec(event->globalPos());
+    if (selected_action == copy_offset_action) {
+        QApplication::clipboard()->setText(offset_text);
+    } else if (insert_bytes_action != nullptr && selected_action == insert_bytes_action) {
+        emit insert_bytes_requested(static_cast<qulonglong>(qMin(document_size(), clicked + 1)));
+    }
 }
 
 void HexView::wheelEvent(QWheelEvent* event) {
@@ -1810,6 +1863,10 @@ qint64 HexView::row_to_offset(qint64 row) const {
 qint64 HexView::clamp_offset(qint64 offset) const {
     if (!has_document() || document_size() <= 0) {
         return 0;
+    }
+
+    if (edit_mode_ == EditMode::Insert && offset == document_size()) {
+        return offset;
     }
 
     return qBound<qint64>(0, offset, document_size() - 1);
@@ -2083,7 +2140,12 @@ qint64 HexView::offset_at(const QPoint& point) const {
     }
 
     column = qBound(0, column, static_cast<int>(bytes_per_row_ - 1));
-    return clamp_offset(row_to_offset(row) + column);
+    const qint64 row_offset = row_to_offset(row);
+    const qint64 offset = row_offset + column;
+    if (edit_mode_ == EditMode::Insert && row == total_rows() - 1 && row_offset < document_size() && offset >= document_size()) {
+        return document_size();
+    }
+    return clamp_offset(offset);
 }
 
 HexView::ActivePane HexView::pane_at(const QPoint& point) const {

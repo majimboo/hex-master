@@ -115,6 +115,8 @@ private:
     void copy_as_hex();
     void paste();
     void paste_hex();
+    void insert_bytes();
+    void insert_bytes_at(qint64 offset);
     void fill_selection();
     void compute_hashes();
     void open_schema_tool();
@@ -208,6 +210,7 @@ private:
     QAction* copy_as_hex_action_ = nullptr;
     QAction* paste_action_ = nullptr;
     QAction* paste_hex_action_ = nullptr;
+    QAction* insert_bytes_action_ = nullptr;
     QAction* fill_selection_action_ = nullptr;
     QAction* compute_hashes_action_ = nullptr;
     QAction* schema_tool_action_ = nullptr;

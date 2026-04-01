@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::ffi::{c_char, c_void, CStr};
 use std::fs;
 use std::fs::{File, OpenOptions};
-use std::io::{Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::ptr;
 
@@ -21,6 +21,14 @@ struct EditRecord {
 enum Piece {
     Original { start: u64, len: u64 },
     Added(Vec<u8>),
+}
+
+struct StructuralInPlacePlan {
+    prefix_len: u64,
+    removed_len: u64,
+    added: Vec<u8>,
+    tail_source_offset: u64,
+    tail_len: u64,
 }
 
 #[derive(Debug, Default)]
@@ -404,6 +412,50 @@ fn report_save_progress(
     }
 }
 
+fn structural_in_place_plan(document: &FileDocumentHandle) -> Option<StructuralInPlacePlan> {
+    let pieces = document.pieces.as_ref()?;
+    let original_len = document.source.len();
+
+    let mut index = 0_usize;
+    let mut prefix_len = 0_u64;
+    if let Some(Piece::Original { start, len }) = pieces.get(index) {
+        if *start == 0 {
+            prefix_len = *len;
+            index += 1;
+        }
+    }
+
+    let mut added = Vec::new();
+    if let Some(Piece::Added(bytes)) = pieces.get(index) {
+        added = bytes.clone();
+        index += 1;
+    }
+
+    let mut tail_source_offset = original_len;
+    let mut tail_len = 0_u64;
+    if let Some(Piece::Original { start, len }) = pieces.get(index) {
+        if start.saturating_add(*len) != original_len || *start < prefix_len {
+            return None;
+        }
+        tail_source_offset = *start;
+        tail_len = *len;
+        index += 1;
+    }
+
+    if index != pieces.len() {
+        return None;
+    }
+
+    let removed_len = original_len.checked_sub(prefix_len + tail_len)?;
+    Some(StructuralInPlacePlan {
+        prefix_len,
+        removed_len,
+        added,
+        tail_source_offset,
+        tail_len,
+    })
+}
+
 fn save_document(
     document: &mut FileDocumentHandle,
     target_path: &PathBuf,
@@ -521,6 +573,118 @@ fn save_document_in_place(
     progress_callback: Option<SaveProgressCallback>,
     user_data: *mut c_void,
 ) -> bool {
+    if let Some(plan) = structural_in_place_plan(document) {
+        let new_len = plan.prefix_len + plan.added.len() as u64 + plan.tail_len;
+        let total_work = plan.tail_len + plan.added.len() as u64;
+        if !report_save_progress(progress_callback, user_data, 0, total_work) {
+            return false;
+        }
+
+        let mut output = match OpenOptions::new().read(true).write(true).open(&document.path) {
+            Ok(file) => file,
+            Err(_) => return false,
+        };
+
+        const CHUNK_SIZE: usize = 8 * 1024 * 1024;
+        let delta = plan.added.len() as i64 - plan.removed_len as i64;
+        let mut completed = 0_u64;
+
+        if delta > 0 {
+            if output.set_len(new_len).is_err() {
+                return false;
+            }
+
+            let mut moved = plan.tail_len;
+            while moved > 0 {
+                let Some(chunk_len) = usize::try_from(moved.min(CHUNK_SIZE as u64)).ok() else {
+                    return false;
+                };
+                let chunk_len_u64 = chunk_len as u64;
+                let src = plan.tail_source_offset + moved - chunk_len_u64;
+                let dst = (src as i64 + delta) as u64;
+                let mut buffer = vec![0_u8; chunk_len];
+                if output.seek(SeekFrom::Start(src)).is_err() {
+                    return false;
+                }
+                if output.read_exact(&mut buffer).is_err() {
+                    return false;
+                }
+                if output.seek(SeekFrom::Start(dst)).is_err() {
+                    return false;
+                }
+                if output.write_all(&buffer).is_err() {
+                    return false;
+                }
+                moved -= chunk_len_u64;
+                completed += chunk_len_u64;
+                if !report_save_progress(progress_callback, user_data, completed, total_work) {
+                    return false;
+                }
+            }
+        }
+
+        if !plan.added.is_empty() {
+            if output.seek(SeekFrom::Start(plan.prefix_len)).is_err() {
+                return false;
+            }
+            if output.write_all(&plan.added).is_err() {
+                return false;
+            }
+            completed += plan.added.len() as u64;
+            if !report_save_progress(progress_callback, user_data, completed, total_work) {
+                return false;
+            }
+        }
+
+        if delta < 0 {
+            let mut moved = 0_u64;
+            while moved < plan.tail_len {
+                let Some(chunk_len) = usize::try_from((plan.tail_len - moved).min(CHUNK_SIZE as u64)).ok() else {
+                    return false;
+                };
+                let chunk_len_u64 = chunk_len as u64;
+                let src = plan.tail_source_offset + moved;
+                let dst = (src as i64 + delta) as u64;
+                let mut buffer = vec![0_u8; chunk_len];
+                if output.seek(SeekFrom::Start(src)).is_err() {
+                    return false;
+                }
+                if output.read_exact(&mut buffer).is_err() {
+                    return false;
+                }
+                if output.seek(SeekFrom::Start(dst)).is_err() {
+                    return false;
+                }
+                if output.write_all(&buffer).is_err() {
+                    return false;
+                }
+                moved += chunk_len_u64;
+                completed += chunk_len_u64;
+                if !report_save_progress(progress_callback, user_data, completed, total_work) {
+                    return false;
+                }
+            }
+
+            if output.set_len(new_len).is_err() {
+                return false;
+            }
+        }
+
+        if output.flush().is_err() {
+            return false;
+        }
+
+        let Ok(source) = FileByteSource::open(&document.path) else {
+            return false;
+        };
+        document.source = source;
+        document.pieces = None;
+        document.overwrites.clear();
+        document.undo_stack.clear();
+        document.redo_stack.clear();
+        return true;
+    }
+
     if document.pieces.is_some() {
         return false;
     }
@@ -870,7 +1034,9 @@ pub extern "C" fn hm_file_document_can_save_in_place(handle: *const FileDocument
     }
 
     let document = unsafe { &*handle };
-    !document.source.metadata().read_only && document.pieces.is_none() && !document.overwrites.is_empty()
+    !document.source.metadata().read_only
+        && ((!document.overwrites.is_empty() && document.pieces.is_none())
+            || structural_in_place_plan(document).is_some())
 }
 
 #[unsafe(no_mangle)]
@@ -1119,9 +1285,64 @@ mod tests {
             inserted.as_ptr(),
             inserted.len()
         ));
+        assert!(hm_file_document_delete_range(handle, 0, 1));
         assert!(hm_file_document_is_dirty(handle));
         assert!(!hm_file_document_can_save_in_place(handle));
         assert!(!hm_file_document_save_in_place_with_progress(handle, None, ptr::null_mut()));
+
+        hm_file_document_close(handle);
+        fs::remove_file(path).expect("cleanup temp file");
+    }
+
+    #[test]
+    fn append_only_structural_edits_can_save_in_place() {
+        let path = create_temp_file("append_in_place_fast", &[0x10, 0x20, 0x30]);
+        let handle = open_handle(&path);
+
+        let appended = [0xAA, 0xBB];
+        assert!(hm_file_document_insert_range(
+            handle,
+            hm_file_document_size(handle),
+            appended.as_ptr(),
+            appended.len()
+        ));
+        assert!(hm_file_document_can_save_in_place(handle));
+        assert!(hm_file_document_save_in_place_with_progress(handle, None, ptr::null_mut()));
+        assert_eq!(fs::read(&path).expect("read saved file"), vec![0x10, 0x20, 0x30, 0xAA, 0xBB]);
+
+        hm_file_document_close(handle);
+        fs::remove_file(path).expect("cleanup temp file");
+    }
+
+    #[test]
+    fn truncate_only_structural_edits_can_save_in_place() {
+        let path = create_temp_file("truncate_in_place_fast", &[1, 2, 3, 4, 5, 6]);
+        let handle = open_handle(&path);
+
+        assert!(hm_file_document_delete_range(handle, hm_file_document_size(handle) - 2, 2));
+        assert!(hm_file_document_can_save_in_place(handle));
+        assert!(hm_file_document_save_in_place_with_progress(handle, None, ptr::null_mut()));
+        assert_eq!(fs::read(&path).expect("read saved file"), vec![1, 2, 3, 4]);
+
+        hm_file_document_close(handle);
+        fs::remove_file(path).expect("cleanup temp file");
+    }
+
+    #[test]
+    fn small_tail_insert_can_save_in_place() {
+        let path = create_temp_file("tail_insert_in_place_fast", &[0x01, 0x02, 0x03, 0x04, 0x05, 0x06]);
+        let handle = open_handle(&path);
+
+        let inserted = [0x99, 0x98];
+        assert!(hm_file_document_insert_range(
+            handle,
+            hm_file_document_size(handle) - 1,
+            inserted.as_ptr(),
+            inserted.len()
+        ));
+        assert!(hm_file_document_can_save_in_place(handle));
+        assert!(hm_file_document_save_in_place_with_progress(handle, None, ptr::null_mut()));
+        assert_eq!(fs::read(&path).expect("read saved file"), vec![0x01, 0x02, 0x03, 0x04, 0x05, 0x99, 0x98, 0x06]);
 
         hm_file_document_close(handle);
         fs::remove_file(path).expect("cleanup temp file");

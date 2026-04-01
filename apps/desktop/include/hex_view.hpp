@@ -98,6 +98,7 @@ public:
     QString selected_hex_text() const;
     QString selected_text_text() const;
     bool insert_at_caret(const QByteArray& bytes);
+    bool insert_at_offset(qint64 offset, const QByteArray& bytes);
     bool delete_selection();
     bool delete_at_caret();
     bool backspace_at_caret();
@@ -131,6 +132,7 @@ signals:
     void document_loaded(const QString& title, qulonglong document_size);
     void bookmarks_changed();
     void inspector_changed(const QString& text);
+    void insert_bytes_requested(qulonglong offset);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -139,6 +141,7 @@ protected:
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
+    void contextMenuEvent(QContextMenuEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
 
 private:

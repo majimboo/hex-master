@@ -1913,6 +1913,8 @@ void MainWindow::setup_menu() {
     paste_hex_action_ = editMenu->addAction("Paste H&ex");
     paste_hex_action_->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+V")));
     connect(paste_hex_action_, &QAction::triggered, this, &MainWindow::paste_hex);
+    insert_bytes_action_ = editMenu->addAction("Insert &Bytes...");
+    connect(insert_bytes_action_, &QAction::triggered, this, &MainWindow::insert_bytes);
     fill_selection_action_ = editMenu->addAction("&Fill Selection...");
     connect(fill_selection_action_, &QAction::triggered, this, &MainWindow::fill_selection);
     editMenu->addSeparator();
@@ -2731,6 +2733,9 @@ void MainWindow::setup_central_widget() {
     connect(hex_view_, &HexView::status_changed, this, &MainWindow::update_status);
     connect(hex_view_, &HexView::document_loaded, this, &MainWindow::update_window_title);
     connect(hex_view_, &HexView::bookmarks_changed, this, &MainWindow::update_bookmarks_view);
+    connect(hex_view_, &HexView::insert_bytes_requested, this, [this](qulonglong offset) {
+        insert_bytes_at(static_cast<qint64>(offset));
+    });
     connect(hex_view_, &HexView::inspector_changed, this, [this](const QString& text) {
         update_inspector_view(text);
     });
@@ -3088,6 +3093,57 @@ void MainWindow::fill_selection() {
     }
 
     statusBar()->showMessage(QStringLiteral("Filled %1 bytes.").arg(fill_size), 2500);
+}
+
+void MainWindow::insert_bytes() {
+    insert_bytes_at(hex_view_ ? hex_view_->caret_offset() : 0);
+}
+
+void MainWindow::insert_bytes_at(qint64 default_offset) {
+    if (!hex_view_ || !hex_view_->has_document()) {
+        statusBar()->showMessage(QStringLiteral("Open a file before inserting bytes."), 2500);
+        return;
+    }
+
+    if (hex_view_->is_read_only()) {
+        statusBar()->showMessage(QStringLiteral("Document is read-only."), 2500);
+        return;
+    }
+
+    QDialog dialog(this);
+    dialog.setWindowTitle(QStringLiteral("Insert Bytes"));
+    auto* layout = new QFormLayout(&dialog);
+
+    auto* bytes_edit = new QLineEdit(&dialog);
+    bytes_edit->setPlaceholderText(QStringLiteral("DE AD BE EF"));
+    auto* append_to_end = new QCheckBox(QStringLiteral("Insert at end of file"), &dialog);
+    layout->addRow(QStringLiteral("Bytes (hex)"), bytes_edit);
+    layout->addRow(QString(), append_to_end);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    layout->addRow(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    QByteArray bytes;
+    if (!try_parse_hex_bytes(bytes_edit->text(), bytes) || bytes.isEmpty()) {
+        statusBar()->showMessage(QStringLiteral("Enter one or more bytes in hex."), 3000);
+        return;
+    }
+
+    const qint64 insert_offset = append_to_end->isChecked()
+        ? hex_view_->document_size()
+        : qBound<qint64>(0, default_offset, hex_view_->document_size());
+    if (!hex_view_->insert_at_offset(insert_offset, bytes)) {
+        statusBar()->showMessage(QStringLiteral("Insert Bytes failed."), 3000);
+        return;
+    }
+
+    statusBar()->showMessage(QStringLiteral("Inserted %1 bytes.").arg(bytes.size()), 2500);
 }
 
 void MainWindow::compute_hashes() {
