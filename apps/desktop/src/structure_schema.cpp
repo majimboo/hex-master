@@ -299,7 +299,7 @@ bool resolve_expression_value(const QString& expression, const QMap<QString, qui
 
 QString format_bytes_preview(const QByteArray& bytes) {
     QString text;
-    const int shown = qMin(bytes.size(), 16);
+    const int shown = qMin(bytes.size(), 32);
     for (int index = 0; index < shown; ++index) {
         if (index > 0) {
             text += QLatin1Char(' ');

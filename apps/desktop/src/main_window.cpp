@@ -136,6 +136,7 @@ public:
     }
 };
 
+
 class EditModeSegmentedControl final : public QWidget {
 public:
     explicit EditModeSegmentedControl(QWidget* parent = nullptr) : QWidget(parent) {
@@ -489,6 +490,15 @@ public:
             QStringLiteral("Value"),
             QStringLiteral("Offset"),
             QStringLiteral("Size")});
+        structure_tree_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+        structure_tree_->setSelectionMode(QAbstractItemView::SingleSelection);
+        structure_tree_->setSelectionBehavior(QAbstractItemView::SelectRows);
+        structure_tree_->setStyleSheet(QStringLiteral(
+            "QTreeWidget::item:selected {"
+            " background: #2b6cb0;"
+            " color: white;"
+            "}"
+        ));
         structure_tree_->header()->setStretchLastSection(false);
         structure_tree_->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
         structure_tree_->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
@@ -532,7 +542,6 @@ public:
         connect(structure_tree_, &QTreeWidget::itemExpanded, this, [this](QTreeWidgetItem* item) { populate_item_children(item); });
         connect(structure_tree_, &QTreeWidget::itemActivated, this, [this](QTreeWidgetItem*, int) { activate_item(); });
         connect(structure_tree_, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem*, int) { activate_item(); });
-
         refresh_recent_menu();
     }
 
@@ -830,12 +839,17 @@ private:
         return reinterpret_cast<const StructureSchema::ParsedNode*>(static_cast<quintptr>(item->data(0, kNodePtrRole).toULongLong()));
     }
 
+    QString display_value_for_node(const StructureSchema::ParsedNode& node) const {
+        return node.value;
+    }
+
     QTreeWidgetItem* append_node(QTreeWidgetItem* parent, const StructureSchema::ParsedNode& node) {
         const QString offset_value = QStringLiteral("0x%1").arg(node.offset, 0, 16).toUpper();
         const QString size_value = QString::number(node.size);
+        const QString display_value = display_value_for_node(node);
         auto* item = parent == nullptr
-            ? new QTreeWidgetItem(structure_tree_, QStringList{node.name, node.type_name, node.value, offset_value, size_value})
-            : new QTreeWidgetItem(parent, QStringList{node.name, node.type_name, node.value, offset_value, size_value});
+            ? new QTreeWidgetItem(structure_tree_, QStringList{node.name, node.type_name, display_value, offset_value, size_value})
+            : new QTreeWidgetItem(parent, QStringList{node.name, node.type_name, display_value, offset_value, size_value});
         item->setData(0, Qt::UserRole, node.offset);
         item->setData(1, Qt::UserRole, node.size);
         item->setData(0, kNodePtrRole, node_ptr_variant(&node));
@@ -939,98 +953,42 @@ private:
         progress_dialog.setAutoReset(false);
         progress_dialog.setMinimumWidth(480);
         progress_dialog.setValue(0);
-        QPointer<QProgressDialog> dialog_ptr(&progress_dialog);
-        QPointer<HexView> hex_view_ptr(hex_view_);
-        std::atomic_bool cancel_requested = false;
-        connect(&progress_dialog, &QProgressDialog::canceled, this, [&cancel_requested]() {
-            cancel_requested.store(true, std::memory_order_relaxed);
-        });
-
-        QFutureWatcher<SchemaRunResult> watcher;
-        QEventLoop loop;
-        connect(&watcher, &QFutureWatcher<SchemaRunResult>::finished, &loop, &QEventLoop::quit);
-
-        watcher.setFuture(QtConcurrent::run([schema, base_offset_signed, document_size, available_from_base, base_offset, dialog_ptr, hex_view_ptr, &cancel_requested]() -> SchemaRunResult {
-            SchemaRunResult result;
-            result.available_from_base = available_from_base;
-            result.document_size = document_size;
-            result.base_offset = base_offset;
-
-            QElapsedTimer progress_timer;
-            progress_timer.start();
-            auto read_range = [hex_view_ptr](qint64 start, qint64 length) -> QByteArray {
-                if (!hex_view_ptr) {
-                    return {};
-                }
-                QByteArray bytes;
-                QMetaObject::invokeMethod(hex_view_ptr.data(), [&]() {
-                    bytes = hex_view_ptr->read_bytes(start, length);
-                }, Qt::BlockingQueuedConnection);
-                return bytes;
-            };
-
-            if (!StructureSchema::evaluate_schema(
-                    schema,
-                    base_offset_signed,
-                    document_size,
-                    read_range,
-                    result.root_node,
-                    [&](qint64, qint64 covered_bytes) {
-                        if (cancel_requested.load(std::memory_order_relaxed)) {
-                            result.canceled = true;
-                            return false;
-                        }
-                        if (progress_timer.elapsed() < 50 && covered_bytes < available_from_base) {
-                            return true;
-                        }
-                        progress_timer.restart();
-                        if (dialog_ptr) {
-                            QMetaObject::invokeMethod(dialog_ptr.data(), [dialog_ptr, covered_bytes, available_from_base]() {
-                                if (!dialog_ptr) {
-                                    return;
-                                }
-                                const int value = available_from_base > 0
-                                    ? static_cast<int>(qBound<qint64>(0, (covered_bytes * 1000) / available_from_base, 1000LL))
-                                    : 1000;
-                                dialog_ptr->setLabelText(QStringLiteral("Applying schema...\n%1 of %2")
-                                                             .arg(format_size(qMax<qint64>(0, covered_bytes)))
-                                                             .arg(format_size(available_from_base)));
-                                dialog_ptr->setValue(value);
-                            }, Qt::QueuedConnection);
-                        }
-                        return true;
-                    },
-                    &result.error)) {
-                if (result.error.isEmpty() && result.canceled) {
-                    result.error = QStringLiteral("Schema run canceled.");
-                }
-                return result;
-            }
-
-            result.ok = true;
-            result.root_name = schema.root_name;
-            result.covered_bytes = qMax<qint64>(0, result.root_node.size);
-            return result;
-        }));
-
-        progress_dialog.show();
-        loop.exec();
-        const SchemaRunResult result = watcher.result();
-        progress_dialog.setValue(1000);
-
-        if (!result.ok) {
-            if (!result.canceled) {
-                structure_tree_->clear();
-                editor_->set_error_line(error_line_from_message(result.error));
-                set_status(result.error, true);
-            } else {
-                set_status(QStringLiteral("Schema run canceled."), true);
-            }
+        QElapsedTimer progress_timer;
+        progress_timer.start();
+        StructureSchema::ParsedNode root_node;
+        if (!StructureSchema::evaluate_schema(
+                schema,
+                base_offset_signed,
+                document_size,
+                [this](qint64 start, qint64 length) { return hex_view_->read_bytes(start, length); },
+                root_node,
+                [&](qint64, qint64 covered_bytes) {
+                    if (progress_timer.elapsed() < 50 && covered_bytes < available_from_base) {
+                        return !progress_dialog.wasCanceled();
+                    }
+                    progress_timer.restart();
+                    const int value = available_from_base > 0
+                        ? static_cast<int>(qBound<qint64>(0, (covered_bytes * 1000) / available_from_base, 1000LL))
+                        : 1000;
+                    progress_dialog.setLabelText(QStringLiteral("Applying schema...\n%1 of %2")
+                                                     .arg(format_size(qMax<qint64>(0, covered_bytes)))
+                                                     .arg(format_size(available_from_base)));
+                    progress_dialog.setValue(value);
+                    QApplication::processEvents();
+                    return !progress_dialog.wasCanceled();
+                },
+                &error_message)) {
+            progress_dialog.cancel();
+            structure_tree_->clear();
+            editor_->set_error_line(error_line_from_message(error_message));
+            set_status(error_message, true);
             return;
         }
 
+        progress_dialog.setValue(1000);
+
         editor_->set_error_line(-1);
-        parsed_root_ = std::move(result.root_node);
+        parsed_root_ = std::move(root_node);
         has_parsed_root_ = true;
         structure_tree_->clear();
         structure_tree_->setUpdatesEnabled(false);
@@ -1039,7 +997,7 @@ private:
         root_item->setExpanded(true);
         structure_tree_->setUpdatesEnabled(true);
 
-        const qint64 covered_bytes = qMax<qint64>(0, result.covered_bytes);
+        const qint64 covered_bytes = qMax<qint64>(0, parsed_root_.size);
         const qint64 trailing_bytes = qMax<qint64>(0, available_from_base - covered_bytes);
         const double remaining_percent = available_from_base > 0
             ? (100.0 * static_cast<double>(covered_bytes) / static_cast<double>(available_from_base))
@@ -1053,7 +1011,7 @@ private:
 
         set_status(QStringLiteral(
                        "Applied schema `%1` at 0x%2. Covered %3 of %4 from base offset (%5% of remaining file, %6% of total file), %7.")
-                       .arg(result.root_name)
+                       .arg(schema.root_name)
                        .arg(base_offset, 0, 16)
                        .arg(format_size(covered_bytes))
                        .arg(format_size(available_from_base))

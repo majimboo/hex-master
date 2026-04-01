@@ -24,7 +24,7 @@ It is designed as a modern desktop alternative to Hex Workshop for inspecting an
 - loads and browses large binary files efficiently, including multi-GB data sets
 - bookmarks, checksums, recent files, and session restore
 - configurable viewport layout with persisted gutters, offsets, row numbers, and bytes-per-row
-- schema editor with a custom binary structure DSL, validation, and expression-based dependent arrays
+- schema editor with a custom binary structure DSL, validation, expression-based dependent arrays, and structured field inspection
 
 ## Large File Handling
 

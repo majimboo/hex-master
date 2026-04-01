@@ -2,6 +2,8 @@
 
 Hex Master supports a compact schema DSL for describing binary structures and applying them at a chosen base offset.
 
+After a schema runs, the structure tree shows parsed offsets, sizes, and values. Selecting a field in the tree highlights the corresponding byte range in the main hex view.
+
 ## Overview
 
 Each schema contains:
@@ -59,6 +61,14 @@ Other supported forms:
   Reads an array from a different offset.
 - `Entry[count * 2] entries @base + 0x20`
   Uses expressions in both count and offset.
+
+## Structure tree interaction
+
+After a successful run:
+
+- click a field in the structure tree to jump the main hex view to that byte range
+- use the tree to inspect parsed offsets, sizes, and interpreted values
+- use the main hex editor itself for byte-level modifications
 
 ## Example with offset-based array
 
