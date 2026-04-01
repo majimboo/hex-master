@@ -40,6 +40,19 @@ jobs:
         shell: pwsh
         run: cmake -S apps/desktop -B build/qt-shell-complete -G "Visual Studio 17 2022" -A x64
 
-      - name: Build Qt shell
+      - name: Build Qt shell release
         shell: pwsh
-        run: cmake --build build/qt-shell-complete --config Debug
+        run: cmake --build build/qt-shell-complete --config Release
+
+      - name: Deploy Qt runtime
+        shell: pwsh
+        run: |
+          $exe = Resolve-Path "build/qt-shell-complete/Release/HexMaster.exe"
+          windeployqt --release --compiler-runtime $exe
+
+      - name: Package release smoke test
+        shell: pwsh
+        run: |
+          if (Test-Path "dist") { Remove-Item "dist" -Recurse -Force }
+          New-Item -ItemType Directory -Path "dist" | Out-Null
+          Compress-Archive -Path "build/qt-shell-complete/Release/*" -DestinationPath "dist/HexMaster-windows-x64-ci.zip"

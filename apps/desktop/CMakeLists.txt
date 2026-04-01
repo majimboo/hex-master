@@ -8,6 +8,7 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
+find_program(CARGO_EXECUTABLE cargo REQUIRED)
 
 qt_standard_project_setup()
 
@@ -15,6 +16,14 @@ set(HEX_MASTER_RUST_LIB_DEBUG "${CMAKE_SOURCE_DIR}/../../target/debug/hexapp_ffi
 set(HEX_MASTER_RUST_LIB_RELEASE "${CMAKE_SOURCE_DIR}/../../target/release/hexapp_ffi.dll.lib")
 set(HEX_MASTER_RUST_DLL_DEBUG "${CMAKE_SOURCE_DIR}/../../target/debug/hexapp_ffi.dll")
 set(HEX_MASTER_RUST_DLL_RELEASE "${CMAKE_SOURCE_DIR}/../../target/release/hexapp_ffi.dll")
+
+add_custom_target(hex_master_rust_ffi
+    COMMAND "${CARGO_EXECUTABLE}" build --package hexapp-ffi "$<$<NOT:$<CONFIG:Debug>>:--release>"
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/../.."
+    COMMENT "Building Rust FFI bridge"
+    VERBATIM
+)
+
 configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/app_version.rc.in"
     "${CMAKE_CURRENT_BINARY_DIR}/app_version.rc"
@@ -36,6 +45,7 @@ qt_add_executable(hex_master_qt_shell WIN32
 
 target_include_directories(hex_master_qt_shell PRIVATE include)
 target_compile_definitions(hex_master_qt_shell PRIVATE HEX_MASTER_VERSION="${PROJECT_VERSION}")
+add_dependencies(hex_master_qt_shell hex_master_rust_ffi)
 target_link_libraries(hex_master_qt_shell PRIVATE
     Qt6::Core
     Qt6::Gui
