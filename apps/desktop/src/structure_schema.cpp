@@ -64,18 +64,236 @@ bool set_error(QString* error_message, int line, const QString& message) {
     return false;
 }
 
-bool resolve_token_value(const QString& token, const QMap<QString, quint64>& context, quint64& value) {
-    bool ok = false;
-    const quint64 numeric = token.toULongLong(&ok, 0);
-    if (ok) {
-        value = numeric;
+enum class ExpressionTokenKind {
+    End,
+    Invalid,
+    Number,
+    Identifier,
+    Plus,
+    Minus,
+    Multiply,
+    Divide,
+    LeftParen,
+    RightParen,
+};
+
+struct ExpressionToken {
+    ExpressionTokenKind kind = ExpressionTokenKind::End;
+    QString text;
+    quint64 number = 0;
+};
+
+class ExpressionParser {
+public:
+    ExpressionParser(const QString& expression, const QMap<QString, quint64>& context)
+        : expression_(expression), context_(context) {
+        next();
+    }
+
+    bool parse(quint64& value, QString& error) {
+        if (!parse_expression(value, error)) {
+            return false;
+        }
+        if (current_.kind != ExpressionTokenKind::End) {
+            error = QStringLiteral("Unexpected token `%1`.").arg(current_.text);
+            return false;
+        }
         return true;
     }
-    const auto it = context.constFind(token);
-    if (it == context.cend()) {
+
+private:
+    bool parse_expression(quint64& value, QString& error) {
+        if (!parse_term(value, error)) {
+            return false;
+        }
+        while (current_.kind == ExpressionTokenKind::Plus || current_.kind == ExpressionTokenKind::Minus) {
+            const ExpressionTokenKind op = current_.kind;
+            next();
+            quint64 rhs = 0;
+            if (!parse_term(rhs, error)) {
+                return false;
+            }
+            if (op == ExpressionTokenKind::Plus) {
+                if (rhs > std::numeric_limits<quint64>::max() - value) {
+                    error = QStringLiteral("Expression overflow.");
+                    return false;
+                }
+                value += rhs;
+            } else {
+                if (rhs > value) {
+                    error = QStringLiteral("Expression underflow.");
+                    return false;
+                }
+                value -= rhs;
+            }
+        }
+        return true;
+    }
+
+    bool parse_term(quint64& value, QString& error) {
+        if (!parse_factor(value, error)) {
+            return false;
+        }
+        while (current_.kind == ExpressionTokenKind::Multiply || current_.kind == ExpressionTokenKind::Divide) {
+            const ExpressionTokenKind op = current_.kind;
+            next();
+            quint64 rhs = 0;
+            if (!parse_factor(rhs, error)) {
+                return false;
+            }
+            if (op == ExpressionTokenKind::Multiply) {
+                if (value != 0 && rhs > std::numeric_limits<quint64>::max() / value) {
+                    error = QStringLiteral("Expression overflow.");
+                    return false;
+                }
+                value *= rhs;
+            } else {
+                if (rhs == 0) {
+                    error = QStringLiteral("Division by zero.");
+                    return false;
+                }
+                value /= rhs;
+            }
+        }
+        return true;
+    }
+
+    bool parse_factor(quint64& value, QString& error) {
+        if (current_.kind == ExpressionTokenKind::Number) {
+            value = current_.number;
+            next();
+            return true;
+        }
+
+        if (current_.kind == ExpressionTokenKind::Identifier) {
+            const auto it = context_.constFind(current_.text);
+            if (it == context_.cend()) {
+                error = QStringLiteral("Unknown symbol `%1`.").arg(current_.text);
+                return false;
+            }
+            value = it.value();
+            next();
+            return true;
+        }
+
+        if (current_.kind == ExpressionTokenKind::LeftParen) {
+            next();
+            if (!parse_expression(value, error)) {
+                return false;
+            }
+            if (current_.kind != ExpressionTokenKind::RightParen) {
+                error = QStringLiteral("Missing closing `)`.");
+                return false;
+            }
+            next();
+            return true;
+        }
+
+        error = current_.kind == ExpressionTokenKind::End
+            ? QStringLiteral("Unexpected end of expression.")
+            : QStringLiteral("Unexpected token `%1`.").arg(current_.text);
         return false;
     }
-    value = it.value();
+
+    void next() {
+        while (index_ < expression_.size() && expression_.at(index_).isSpace()) {
+            ++index_;
+        }
+        if (index_ >= expression_.size()) {
+            current_ = {};
+            current_.kind = ExpressionTokenKind::End;
+            return;
+        }
+
+        const QChar ch = expression_.at(index_);
+        if (ch == QLatin1Char('+')) {
+            current_ = {ExpressionTokenKind::Plus, QString(ch), 0};
+            ++index_;
+            return;
+        }
+        if (ch == QLatin1Char('-')) {
+            current_ = {ExpressionTokenKind::Minus, QString(ch), 0};
+            ++index_;
+            return;
+        }
+        if (ch == QLatin1Char('*')) {
+            current_ = {ExpressionTokenKind::Multiply, QString(ch), 0};
+            ++index_;
+            return;
+        }
+        if (ch == QLatin1Char('/')) {
+            current_ = {ExpressionTokenKind::Divide, QString(ch), 0};
+            ++index_;
+            return;
+        }
+        if (ch == QLatin1Char('(')) {
+            current_ = {ExpressionTokenKind::LeftParen, QString(ch), 0};
+            ++index_;
+            return;
+        }
+        if (ch == QLatin1Char(')')) {
+            current_ = {ExpressionTokenKind::RightParen, QString(ch), 0};
+            ++index_;
+            return;
+        }
+
+        if (ch.isDigit()) {
+            const int start = index_;
+            if (ch == QLatin1Char('0') && index_ + 1 < expression_.size()
+                && (expression_.at(index_ + 1) == QLatin1Char('x') || expression_.at(index_ + 1) == QLatin1Char('X'))) {
+                index_ += 2;
+                while (index_ < expression_.size()
+                       && (expression_.at(index_).isDigit()
+                           || (expression_.at(index_).toLower() >= QLatin1Char('a')
+                               && expression_.at(index_).toLower() <= QLatin1Char('f')))) {
+                    ++index_;
+                }
+            } else {
+                while (index_ < expression_.size() && expression_.at(index_).isDigit()) {
+                    ++index_;
+                }
+            }
+            const QString text = expression_.mid(start, index_ - start);
+            bool ok = false;
+            const quint64 number = text.toULongLong(&ok, 0);
+            if (!ok) {
+                current_ = {ExpressionTokenKind::Invalid, text, 0};
+                return;
+            }
+            current_ = {ExpressionTokenKind::Number, text, number};
+            return;
+        }
+
+        if (ch.isLetter() || ch == QLatin1Char('_')) {
+            const int start = index_;
+            ++index_;
+            while (index_ < expression_.size()
+                   && (expression_.at(index_).isLetterOrNumber() || expression_.at(index_) == QLatin1Char('_'))) {
+                ++index_;
+            }
+            current_ = {ExpressionTokenKind::Identifier, expression_.mid(start, index_ - start), 0};
+            return;
+        }
+
+        current_ = {ExpressionTokenKind::Invalid, QString(ch), 0};
+        ++index_;
+    }
+
+    QString expression_;
+    const QMap<QString, quint64>& context_;
+    int index_ = 0;
+    ExpressionToken current_;
+};
+
+bool resolve_expression_value(const QString& expression, const QMap<QString, quint64>& context, quint64& value, QString* error = nullptr) {
+    ExpressionParser parser(expression.trimmed(), context);
+    QString local_error;
+    if (!parser.parse(value, local_error)) {
+        if (error != nullptr) {
+            *error = local_error;
+        }
+        return false;
+    }
     return true;
 }
 
@@ -145,9 +363,22 @@ double decode_float(const QByteArray& bytes, Endianness endianness) {
 
 struct EvaluationContext {
     const SchemaDefinition* schema = nullptr;
+    qint64 base_offset = 0;
     qint64 document_size = 0;
     ReadRangeCallback read_range;
+    ProgressCallback progress_callback;
 };
+
+bool report_progress(const EvaluationContext& context, qint64 current_offset, int line, QString* error_message) {
+    if (!context.progress_callback) {
+        return true;
+    }
+    const qint64 covered_bytes = qMax<qint64>(0, current_offset - context.base_offset);
+    if (context.progress_callback(current_offset, covered_bytes)) {
+        return true;
+    }
+    return set_error(error_message, line, QStringLiteral("Schema run canceled."));
+}
 
 bool evaluate_struct(
     const EvaluationContext& context,
@@ -175,15 +406,17 @@ bool evaluate_field(
 
     quint64 count = 1;
     if (!field.count_token.isEmpty()) {
-        if (!resolve_token_value(field.count_token, local_values, count)) {
-            return set_error(error_message, field.line, QStringLiteral("Unknown count source `%1`.").arg(field.count_token));
+        QString expression_error;
+        if (!resolve_expression_value(field.count_token, local_values, count, &expression_error)) {
+            return set_error(error_message, field.line, QStringLiteral("Invalid count expression `%1`: %2").arg(field.count_token, expression_error));
         }
     }
 
     quint64 offset_value = static_cast<quint64>(cursor);
     if (!field.offset_token.isEmpty()) {
-        if (!resolve_token_value(field.offset_token, local_values, offset_value)) {
-            return set_error(error_message, field.line, QStringLiteral("Unknown offset source `%1`.").arg(field.offset_token));
+        QString expression_error;
+        if (!resolve_expression_value(field.offset_token, local_values, offset_value, &expression_error)) {
+            return set_error(error_message, field.line, QStringLiteral("Invalid offset expression `%1`: %2").arg(field.offset_token, expression_error));
         }
     }
     const qint64 field_offset = static_cast<qint64>(offset_value);
@@ -201,7 +434,7 @@ bool evaluate_field(
         if (bytes.size() != size) {
             return set_error(error_message, field.line, QStringLiteral("Failed to read `%1` from the document.").arg(field.name));
         }
-        return true;
+        return report_progress(context, offset + size, field.line, error_message);
     };
 
     if (is_bytes) {
@@ -218,7 +451,7 @@ bool evaluate_field(
         if (field.offset_token.isEmpty()) {
             cursor += size;
         }
-        return true;
+        return report_progress(context, field_offset + size, field.line, error_message);
     }
 
     if (is_primitive) {
@@ -254,7 +487,7 @@ bool evaluate_field(
             if (field.offset_token.isEmpty()) {
                 cursor += primitive.width;
             }
-            return true;
+            return report_progress(context, field_offset + primitive.width, field.line, error_message);
         }
 
         qint64 running_offset = field_offset;
@@ -281,6 +514,9 @@ bool evaluate_field(
             }
             node.children.push_back(child);
             running_offset += primitive.width;
+            if (!report_progress(context, running_offset, field.line, error_message)) {
+                return false;
+            }
         }
         node.size = static_cast<qint64>(count) * primitive.width;
         node.value = QStringLiteral("%1 item(s)").arg(count);
@@ -302,7 +538,7 @@ bool evaluate_field(
         if (field.offset_token.isEmpty()) {
             cursor += child.size;
         }
-        return true;
+        return report_progress(context, field_offset + child.size, field.line, error_message);
     }
 
     qint64 running_offset = field_offset;
@@ -315,6 +551,9 @@ bool evaluate_field(
         node.children.push_back(child);
         running_offset += child.size;
         node.size += child.size;
+        if (!report_progress(context, running_offset, field.line, error_message)) {
+            return false;
+        }
     }
     node.value = QStringLiteral("%1 item(s)").arg(count);
     if (field.offset_token.isEmpty()) {
@@ -370,7 +609,7 @@ bool parse_schema(const QString& text, SchemaDefinition& schema, QString* error_
     const QRegularExpression struct_pattern(QStringLiteral(R"(^struct\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{$)"));
     const QRegularExpression root_pattern(QStringLiteral(R"(^root\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{$)"));
     const QRegularExpression endian_pattern(QStringLiteral(R"(^endian\s+(little|big)$)"));
-    const QRegularExpression field_pattern(QStringLiteral(R"(^(bytes|u8|i8|u16|i16|u32|i32|u64|i64|f32|f64|[A-Za-z_][A-Za-z0-9_]*)(?:\[(\d+|[A-Za-z_][A-Za-z0-9_]*)\])?\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+@(\d+|[A-Za-z_][A-Za-z0-9_]*))?$)"));
+    const QRegularExpression field_pattern(QStringLiteral(R"(^(bytes|u8|i8|u16|i16|u32|i32|u64|i64|f32|f64|[A-Za-z_][A-Za-z0-9_]*)(?:\[(.+?)\])?\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+@(.+))?$)"));
 
     for (int index = 0; index < lines.size(); ++index) {
         const int line_number = index + 1;
@@ -398,8 +637,8 @@ bool parse_schema(const QString& text, SchemaDefinition& schema, QString* error_
             current_struct.fields.push_back(FieldDefinition{
                 match.captured(1),
                 match.captured(3),
-                match.captured(2),
-                match.captured(4),
+                match.captured(2).trimmed(),
+                match.captured(4).trimmed(),
                 line_number,
             });
             continue;
@@ -452,6 +691,7 @@ bool evaluate_schema(
     qint64 document_size,
     const ReadRangeCallback& read_range,
     ParsedNode& root_node,
+    const ProgressCallback& progress_callback,
     QString* error_message) {
     const auto it = schema.structs.constFind(schema.root_name);
     if (it == schema.structs.cend()) {
@@ -461,7 +701,7 @@ bool evaluate_schema(
         return set_error(error_message, 0, QStringLiteral("No document reader is available."));
     }
 
-    const EvaluationContext context{&schema, document_size, read_range};
+    const EvaluationContext context{&schema, base_offset, document_size, read_range, progress_callback};
     return evaluate_struct(context, it.value(), base_offset, root_node, error_message, 0);
 }
 

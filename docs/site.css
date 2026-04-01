@@ -308,13 +308,16 @@ a:hover {
 }
 
 .schema-code {
-    margin: 0;
-    padding: 18px 20px;
+    margin: 22px 0 0;
+    padding: 16px 0;
     overflow-x: auto;
     border: 1px solid var(--line);
     border-radius: 18px;
-    background: rgba(255, 255, 255, 0.62);
-    box-shadow: 0 18px 34px var(--shadow);
+    background: linear-gradient(180deg, rgba(242, 237, 229, 0.96), rgba(255, 252, 247, 0.96));
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.85),
+        inset 0 10px 24px rgba(24, 35, 47, 0.035),
+        0 18px 34px var(--shadow);
 }
 
 .schema-code code {
@@ -324,6 +327,104 @@ a:hover {
     line-height: 1.6;
     font-family: "Consolas", "Cascadia Mono", monospace;
     white-space: pre;
+}
+
+.schema-lines {
+    list-style: none;
+    counter-reset: schema-line;
+    padding-left: 0;
+}
+
+.schema-lines li {
+    display: grid;
+    grid-template-columns: 52px minmax(0, 1fr);
+    align-items: baseline;
+    padding: 0 18px;
+    counter-increment: schema-line;
+}
+
+.schema-lines li::before {
+    content: counter(schema-line);
+    color: rgba(91, 102, 116, 0.82);
+    font: 0.84rem/1.6 "Consolas", "Cascadia Mono", monospace;
+    text-align: right;
+    padding-right: 14px;
+    border-right: 1px solid rgba(210, 201, 186, 0.95);
+    margin-right: 14px;
+}
+
+.schema-lines li code {
+    min-width: 0;
+}
+
+.guide-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 18px;
+}
+
+.guide-panel {
+    padding: 18px 20px;
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    background: rgba(255, 255, 255, 0.45);
+}
+
+.guide-panel h3 {
+    margin: 0;
+    font-size: 1.04rem;
+}
+
+.guide-panel ul {
+    margin: 14px 0 0;
+    padding-left: 18px;
+    color: var(--muted);
+    line-height: 1.72;
+}
+
+.guide-table {
+    margin-top: 18px;
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    overflow: hidden;
+    background: rgba(255, 255, 255, 0.52);
+}
+
+.guide-row {
+    display: grid;
+    grid-template-columns: minmax(200px, 0.9fr) minmax(0, 1.3fr);
+    gap: 18px;
+    padding: 14px 18px;
+    border-top: 1px solid rgba(210, 201, 186, 0.8);
+}
+
+.guide-row:first-child {
+    border-top: 0;
+}
+
+.guide-head {
+    background: rgba(33, 90, 155, 0.08);
+}
+
+.guide-row code {
+    color: var(--ink);
+    font-family: "Consolas", "Cascadia Mono", monospace;
+}
+
+.guide-row span,
+.guide-note p {
+    color: var(--muted);
+    line-height: 1.72;
+}
+
+.guide-note {
+    margin-top: 16px;
+    padding-left: 16px;
+    border-left: 3px solid var(--line);
+}
+
+.guide-note p {
+    margin: 0;
 }
 
 .footer-band {
@@ -337,8 +438,13 @@ a:hover {
 @media (max-width: 980px) {
     .hero,
     .feature-grid,
+    .guide-grid,
     .engineering-section,
     .footer-band {
+        grid-template-columns: 1fr;
+    }
+
+    .guide-row {
         grid-template-columns: 1fr;
     }
 

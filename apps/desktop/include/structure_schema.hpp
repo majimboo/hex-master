@@ -43,6 +43,7 @@ struct ParsedNode {
 };
 
 using ReadRangeCallback = std::function<QByteArray(qint64, qint64)>;
+using ProgressCallback = std::function<bool(qint64 current_offset, qint64 covered_bytes)>;
 
 bool parse_schema(const QString& text, SchemaDefinition& schema, QString* error_message = nullptr);
 bool evaluate_schema(
@@ -51,6 +52,7 @@ bool evaluate_schema(
     qint64 document_size,
     const ReadRangeCallback& read_range,
     ParsedNode& root_node,
+    const ProgressCallback& progress_callback = {},
     QString* error_message = nullptr);
 
 QString default_schema_template();

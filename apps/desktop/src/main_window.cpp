@@ -398,6 +398,15 @@ void SchemaLineNumberArea::paintEvent(QPaintEvent* event) {
 
 class SchemaToolDialog final : public QDialog {
 public:
+    static constexpr int kNodePtrRole = Qt::UserRole + 10;
+    static constexpr int kItemKindRole = Qt::UserRole + 11;
+    static constexpr int kChunkStartRole = Qt::UserRole + 12;
+    static constexpr int kChunkEndRole = Qt::UserRole + 13;
+    static constexpr int kPopulatedRole = Qt::UserRole + 14;
+    static constexpr int kItemKindNode = 0;
+    static constexpr int kItemKindChunk = 1;
+    static constexpr int kChunkSize = 256;
+
     SchemaToolDialog(HexView* hex_view, QWidget* parent = nullptr)
         : QDialog(parent), hex_view_(hex_view) {
         setWindowTitle(QStringLiteral("Schema Editor"));
@@ -478,6 +487,7 @@ public:
         connect(run_button, &QPushButton::clicked, this, [this]() { apply_schema(); });
         connect(editor_, &QPlainTextEdit::textChanged, this, [this]() { syntax_timer_->start(); });
         connect(syntax_timer_, &QTimer::timeout, this, [this]() { validate_schema(); });
+        connect(structure_tree_, &QTreeWidget::itemExpanded, this, [this](QTreeWidgetItem* item) { populate_item_children(item); });
         connect(structure_tree_, &QTreeWidget::itemActivated, this, [this](QTreeWidgetItem*, int) { activate_item(); });
         connect(structure_tree_, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem*, int) { activate_item(); });
 
@@ -526,6 +536,20 @@ private:
         bool ok = false;
         value = normalized.toULongLong(&ok, base);
         return ok;
+    }
+
+    static QString format_size(qint64 bytes) {
+        const double value = static_cast<double>(bytes);
+        if (bytes >= (1LL << 30)) {
+            return QStringLiteral("%1 GiB").arg(value / static_cast<double>(1LL << 30), 0, 'f', 2);
+        }
+        if (bytes >= (1LL << 20)) {
+            return QStringLiteral("%1 MiB").arg(value / static_cast<double>(1LL << 20), 0, 'f', 2);
+        }
+        if (bytes >= (1LL << 10)) {
+            return QStringLiteral("%1 KiB").arg(value / static_cast<double>(1LL << 10), 0, 'f', 2);
+        }
+        return QStringLiteral("%1 B").arg(bytes);
     }
 
     void set_status(const QString& text, bool error = false) {
@@ -672,7 +696,27 @@ private:
         save_schema_to(path);
     }
 
-    void append_node(QTreeWidgetItem* parent, const StructureSchema::ParsedNode& node) {
+    static bool is_indexed_array_node(const StructureSchema::ParsedNode& node) {
+        if (node.children.isEmpty()) {
+            return false;
+        }
+        for (const auto& child : node.children) {
+            if (!child.name.startsWith(QLatin1Char('['))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    static QVariant node_ptr_variant(const StructureSchema::ParsedNode* node) {
+        return QVariant::fromValue<qulonglong>(reinterpret_cast<quintptr>(node));
+    }
+
+    static const StructureSchema::ParsedNode* item_node(const QTreeWidgetItem* item) {
+        return reinterpret_cast<const StructureSchema::ParsedNode*>(static_cast<quintptr>(item->data(0, kNodePtrRole).toULongLong()));
+    }
+
+    QTreeWidgetItem* append_node(QTreeWidgetItem* parent, const StructureSchema::ParsedNode& node) {
         const QString offset_value = QStringLiteral("0x%1").arg(node.offset, 0, 16).toUpper();
         const QString size_value = QString::number(node.size);
         auto* item = parent == nullptr
@@ -680,9 +724,64 @@ private:
             : new QTreeWidgetItem(parent, QStringList{node.name, node.type_name, node.value, offset_value, size_value});
         item->setData(0, Qt::UserRole, node.offset);
         item->setData(1, Qt::UserRole, node.size);
-        for (const auto& child : node.children) {
-            append_node(item, child);
+        item->setData(0, kNodePtrRole, node_ptr_variant(&node));
+        item->setData(0, kItemKindRole, kItemKindNode);
+        item->setData(0, kPopulatedRole, false);
+        if (!node.children.isEmpty()) {
+            item->setChildIndicatorPolicy(QTreeWidgetItem::ShowIndicator);
         }
+        return item;
+    }
+
+    void append_chunk_item(QTreeWidgetItem* parent, const StructureSchema::ParsedNode& node, int start_index, int end_index) {
+        const QString label = QStringLiteral("[%1..%2]").arg(start_index).arg(end_index);
+        auto* item = new QTreeWidgetItem(parent, QStringList{
+            label,
+            QStringLiteral("Array Slice"),
+            QStringLiteral("%1 item(s)").arg(end_index - start_index + 1),
+            QString(),
+            QString()});
+        item->setData(0, kNodePtrRole, node_ptr_variant(&node));
+        item->setData(0, kItemKindRole, kItemKindChunk);
+        item->setData(0, kChunkStartRole, start_index);
+        item->setData(0, kChunkEndRole, end_index);
+        item->setData(0, kPopulatedRole, false);
+        item->setChildIndicatorPolicy(QTreeWidgetItem::ShowIndicator);
+    }
+
+    void populate_item_children(QTreeWidgetItem* item) {
+        if (item == nullptr || item->data(0, kPopulatedRole).toBool()) {
+            return;
+        }
+
+        const auto* node = item_node(item);
+        if (node == nullptr) {
+            item->setData(0, kPopulatedRole, true);
+            return;
+        }
+
+        const int item_kind = item->data(0, kItemKindRole).toInt();
+        if (item_kind == kItemKindChunk) {
+            const int start_index = item->data(0, kChunkStartRole).toInt();
+            const int end_index = item->data(0, kChunkEndRole).toInt();
+            for (int index = start_index; index <= end_index && index < node->children.size(); ++index) {
+                append_node(item, node->children.at(index));
+            }
+            item->setData(0, kPopulatedRole, true);
+            return;
+        }
+
+        if (is_indexed_array_node(*node) && node->children.size() > kChunkSize) {
+            for (int start = 0; start < node->children.size(); start += kChunkSize) {
+                const int end = qMin(start + kChunkSize - 1, node->children.size() - 1);
+                append_chunk_item(item, *node, start, end);
+            }
+        } else {
+            for (const auto& child : node->children) {
+                append_node(item, child);
+            }
+        }
+        item->setData(0, kPopulatedRole, true);
     }
 
     void update_window_title() {
@@ -713,25 +812,84 @@ private:
             return;
         }
 
+        const qint64 document_size = hex_view_->document_size();
+        const qint64 base_offset_signed = static_cast<qint64>(base_offset);
+        const qint64 available_from_base = qMax<qint64>(0, document_size - base_offset_signed);
+
+        QProgressDialog progress_dialog(QStringLiteral("Applying schema..."), QStringLiteral("Cancel"), 0, 1000, this);
+        progress_dialog.setWindowTitle(QStringLiteral("Schema Run"));
+        progress_dialog.setWindowModality(Qt::WindowModal);
+        progress_dialog.setMinimumDuration(0);
+        progress_dialog.setAutoClose(false);
+        progress_dialog.setAutoReset(false);
+        progress_dialog.setMinimumWidth(480);
+        progress_dialog.setValue(0);
+
+        QElapsedTimer progress_timer;
+        progress_timer.start();
         StructureSchema::ParsedNode root_node;
         if (!StructureSchema::evaluate_schema(
                 schema,
-                static_cast<qint64>(base_offset),
-                hex_view_->document_size(),
+                base_offset_signed,
+                document_size,
                 [this](qint64 start, qint64 length) { return hex_view_->read_bytes(start, length); },
                 root_node,
+                [&](qint64, qint64 covered_bytes) {
+                    if (progress_timer.elapsed() < 50 && covered_bytes < available_from_base) {
+                        return !progress_dialog.wasCanceled();
+                    }
+                    progress_timer.restart();
+                    const int value = available_from_base > 0
+                        ? static_cast<int>(qBound<qint64>(0, (covered_bytes * 1000) / available_from_base, 1000LL))
+                        : 1000;
+                    progress_dialog.setLabelText(QStringLiteral("Applying schema...\n%1 of %2")
+                                                     .arg(format_size(qMax<qint64>(0, covered_bytes)))
+                                                     .arg(format_size(available_from_base)));
+                    progress_dialog.setValue(value);
+                    QApplication::processEvents();
+                    return !progress_dialog.wasCanceled();
+                },
                 &error_message)) {
+            progress_dialog.cancel();
             structure_tree_->clear();
             editor_->set_error_line(error_line_from_message(error_message));
             set_status(error_message, true);
             return;
         }
 
+        progress_dialog.setValue(1000);
+
         editor_->set_error_line(-1);
+        parsed_root_ = std::move(root_node);
+        has_parsed_root_ = true;
         structure_tree_->clear();
-        append_node(nullptr, root_node);
-        structure_tree_->expandToDepth(1);
-        set_status(QStringLiteral("Applied schema `%1` at 0x%2").arg(schema.root_name).arg(base_offset, 0, 16));
+        structure_tree_->setUpdatesEnabled(false);
+        auto* root_item = append_node(nullptr, parsed_root_);
+        populate_item_children(root_item);
+        root_item->setExpanded(true);
+        structure_tree_->setUpdatesEnabled(true);
+
+        const qint64 covered_bytes = qMax<qint64>(0, parsed_root_.size);
+        const qint64 trailing_bytes = qMax<qint64>(0, available_from_base - covered_bytes);
+        const double remaining_percent = available_from_base > 0
+            ? (100.0 * static_cast<double>(covered_bytes) / static_cast<double>(available_from_base))
+            : 100.0;
+        const double file_percent = document_size > 0
+            ? (100.0 * static_cast<double>(covered_bytes) / static_cast<double>(document_size))
+            : 100.0;
+        const QString coverage_note = trailing_bytes == 0
+            ? QStringLiteral("full coverage from base offset")
+            : QStringLiteral("%1 trailing byte(s) not covered").arg(trailing_bytes);
+
+        set_status(QStringLiteral(
+                       "Applied schema `%1` at 0x%2. Covered %3 of %4 from base offset (%5% of remaining file, %6% of total file), %7.")
+                       .arg(schema.root_name)
+                       .arg(base_offset, 0, 16)
+                       .arg(format_size(covered_bytes))
+                       .arg(format_size(available_from_base))
+                       .arg(remaining_percent, 0, 'f', trailing_bytes == 0 ? 0 : 1)
+                       .arg(file_percent, 0, 'f', 1)
+                       .arg(coverage_note));
     }
 
     void activate_item() {
@@ -763,6 +921,8 @@ private:
     QMenu* recent_menu_ = nullptr;
     QString current_path_;
     QStringList recent_files_;
+    StructureSchema::ParsedNode parsed_root_;
+    bool has_parsed_root_ = false;
 };
 }
 

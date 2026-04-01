@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Hex Master Schema Guide</title>
-    <meta name="description" content="Schema DSL guide for Hex Master, including syntax, arrays, offsets, and example binary structure definitions.">
+    <meta name="description" content="Schema DSL guide for Hex Master, including grammar, types, expressions, arrays, offsets, and working examples.">
     <link rel="stylesheet" href="site.css">
 </head>
 <body>
@@ -16,9 +16,10 @@
             </a>
             <nav class="nav" aria-label="Primary">
                 <a href="index.html">Home</a>
-                <a href="#syntax">Syntax</a>
+                <a href="#overview">Overview</a>
+                <a href="#grammar">Grammar</a>
                 <a href="#examples">Examples</a>
-                <a href="#rules">Rules</a>
+                <a href="#limits">Limits</a>
             </nav>
         </header>
 
@@ -26,10 +27,11 @@
             <section class="hero" id="overview">
                 <div class="hero-copy">
                     <p class="eyebrow">Schema Guide</p>
-                    <h1>Describe binary structures with a compact DSL.</h1>
+                    <h1>Define binary layouts with a compact, file-focused DSL.</h1>
                     <p class="lead">
-                        Hex Master schemas define endianness, named structs, arrays, and offset-based fields.
-                        Apply a schema at a base offset to parse binary data into a structured tree.
+                        Hex Master schemas describe endianness, named structs, scalar fields, byte ranges,
+                        arrays, and offset-based sections. Run a schema at a chosen base offset to parse a
+                        file region into a structured tree with offsets, sizes, and coverage reporting.
                     </p>
                 </div>
 
@@ -43,77 +45,63 @@
                         <strong>Tools &gt; Schema Editor...</strong>
                     </div>
                     <div class="meta-row">
-                        <span>Output</span>
-                        <strong>Structured field tree with offsets and sizes</strong>
+                        <span>Best use</span>
+                        <strong>Custom binary headers, tables, animation blocks, and packed file layouts</strong>
                     </div>
                 </div>
             </section>
 
-            <section class="feature-section" id="syntax">
+            <section class="feature-section">
                 <div class="section-intro">
-                    <p class="eyebrow">Syntax</p>
-                    <h2>Core schema shape</h2>
+                    <p class="eyebrow">Quick Start</p>
+                    <h2>What a schema contains</h2>
                 </div>
 
-                <div class="engineering-copy">
-                    <p>Every schema has an endianness, zero or more named structs, and one root struct.</p>
+                <div class="guide-grid">
+                    <section class="guide-panel">
+                        <h3>Required parts</h3>
+                        <ul>
+                            <li>One endianness line: <code>endian little</code> or <code>endian big</code></li>
+                            <li>Zero or more named <code>struct</code> blocks</li>
+                            <li>Exactly one <code>root</code> block</li>
+                        </ul>
+                    </section>
+                    <section class="guide-panel">
+                        <h3>Run behavior</h3>
+                        <ul>
+                            <li>The base offset is chosen when you run the schema</li>
+                            <li>Fields parse in order</li>
+                            <li>Later fields can refer to earlier scalar fields in the same scope</li>
+                        </ul>
+                    </section>
                 </div>
 
-<pre class="schema-code"><code>endian little
-
-struct Entry {
-  u32 id
-  u16 flags
-  u16 value
-}
-
-root Header {
-  bytes[4] magic
-  u16 version
-  u16 entry_count
-  Entry[entry_count] entries
-}</code></pre>
+                <ol class="schema-code schema-lines">
+                    <li><code>endian little</code></li>
+                    <li><code></code></li>
+                    <li><code>struct Entry {</code></li>
+                    <li><code>  u32 id</code></li>
+                    <li><code>  u16 flags</code></li>
+                    <li><code>  u16 value</code></li>
+                    <li><code>}</code></li>
+                    <li><code></code></li>
+                    <li><code>root Header {</code></li>
+                    <li><code>  bytes[4] magic</code></li>
+                    <li><code>  u16 version</code></li>
+                    <li><code>  u16 entry_count</code></li>
+                    <li><code>  Entry[entry_count] entries</code></li>
+                    <li><code>}</code></li>
+                </ol>
             </section>
 
-            <section class="feature-section" id="examples">
+            <section class="feature-section" id="grammar">
                 <div class="section-intro">
-                    <p class="eyebrow">Examples</p>
-                    <h2>Arrays and offset-based fields</h2>
+                    <p class="eyebrow">Grammar</p>
+                    <h2>Core forms</h2>
                 </div>
 
-<pre class="schema-code"><code>endian little
-
-struct Entry {
-  u32 id
-  u16 flags
-  u16 value
-}
-
-root Header {
-  bytes[4] magic
-  u16 version
-  u16 entry_count
-  u32 entries_offset
-  Entry[entry_count] entries @entries_offset
-}</code></pre>
-
-                <div class="engineering-copy">
-                    <p>
-                        In this example, <code>entries</code> is an array of <code>Entry</code> records.
-                        The array length comes from the earlier <code>entry_count</code> field, and the array
-                        starts at the offset stored in <code>entries_offset</code>.
-                    </p>
-                </div>
-            </section>
-
-            <section class="feature-section" id="rules">
-                <div class="section-intro">
-                    <p class="eyebrow">Rules</p>
-                    <h2>Supported constructs</h2>
-                </div>
-
-                <div class="feature-grid">
-                    <section>
+                <div class="guide-grid">
+                    <section class="guide-panel">
                         <h3>Scalars</h3>
                         <ul>
                             <li><code>u8</code>, <code>u16</code>, <code>u32</code>, <code>u64</code></li>
@@ -121,31 +109,183 @@ root Header {
                             <li><code>f32</code>, <code>f64</code></li>
                         </ul>
                     </section>
-                    <section>
-                        <h3>Containers</h3>
+                    <section class="guide-panel">
+                        <h3>Byte ranges</h3>
                         <ul>
-                            <li>Named <code>struct</code> blocks</li>
-                            <li>One <code>root</code> block</li>
-                            <li>Byte arrays with <code>bytes[n]</code></li>
-                            <li>Struct arrays with <code>Type[count]</code></li>
+                            <li><code>bytes[16] header</code></li>
+                            <li>Useful for magic values, opaque blocks, or raw payload slices</li>
                         </ul>
                     </section>
-                    <section>
-                        <h3>References</h3>
+                    <section class="guide-panel">
+                        <h3>Struct fields</h3>
                         <ul>
-                            <li>Array counts can use an earlier scalar field</li>
-                            <li>Fields can start at an earlier scalar offset using <code>@field_name</code></li>
-                            <li>Base offset is supplied when running the schema</li>
+                            <li><code>Header header</code></li>
+                            <li><code>Entry[count] entries</code></li>
                         </ul>
                     </section>
                 </div>
 
-                <div class="engineering-copy">
+                <div class="guide-table">
+                    <div class="guide-row guide-head">
+                        <strong>Form</strong>
+                        <strong>Meaning</strong>
+                    </div>
+                    <div class="guide-row">
+                        <code>u32 count</code>
+                        <span>Read one 32-bit unsigned integer</span>
+                    </div>
+                    <div class="guide-row">
+                        <code>bytes[32] blob</code>
+                        <span>Read 32 raw bytes</span>
+                    </div>
+                    <div class="guide-row">
+                        <code>Entry[count] entries</code>
+                        <span>Read an array of structs using an earlier scalar count</span>
+                    </div>
+                    <div class="guide-row">
+                        <code>Entry[count] entries @table_offset</code>
+                        <span>Read an array from a different location in the file</span>
+                    </div>
+                    <div class="guide-row">
+                        <code>Entry[count * 2] entries @base + 0x20</code>
+                        <span>Use expressions in both count and offset</span>
+                    </div>
+                </div>
+            </section>
+
+            <section class="feature-section">
+                <div class="section-intro">
+                    <p class="eyebrow">Expressions</p>
+                    <h2>Supported in counts and offsets</h2>
+                </div>
+
+                <div class="guide-grid">
+                    <section class="guide-panel">
+                        <h3>Supported</h3>
+                        <ul>
+                            <li>Earlier scalar fields in the same scope</li>
+                            <li>Decimal integers</li>
+                            <li>Hex integers like <code>0x20</code></li>
+                            <li><code>+</code>, <code>-</code>, <code>*</code>, <code>/</code></li>
+                            <li>Parentheses</li>
+                        </ul>
+                    </section>
+                    <section class="guide-panel">
+                        <h3>Examples</h3>
+                        <ul>
+                            <li><code>Entry[count + 1] entries</code></li>
+                            <li><code>bytes[numBones * 48] pose_data</code></li>
+                            <li><code>Section[sectionCount] sections @headerSize + 0x20</code></li>
+                        </ul>
+                    </section>
+                </div>
+            </section>
+
+            <section class="feature-section" id="examples">
+                <div class="section-intro">
+                    <p class="eyebrow">Examples</p>
+                    <h2>Offset-based table</h2>
+                </div>
+
+                <ol class="schema-code schema-lines">
+                    <li><code>endian little</code></li>
+                    <li><code></code></li>
+                    <li><code>struct Entry {</code></li>
+                    <li><code>  u32 id</code></li>
+                    <li><code>  u16 flags</code></li>
+                    <li><code>  u16 value</code></li>
+                    <li><code>}</code></li>
+                    <li><code></code></li>
+                    <li><code>root Header {</code></li>
+                    <li><code>  bytes[4] magic</code></li>
+                    <li><code>  u16 version</code></li>
+                    <li><code>  u16 entry_count</code></li>
+                    <li><code>  u32 entries_offset</code></li>
+                    <li><code>  Entry[entry_count] entries @entries_offset</code></li>
+                    <li><code>}</code></li>
+                </ol>
+
+                <div class="guide-note">
                     <p>
-                        The current DSL is intentionally small. It does not yet support dotted paths,
-                        unions, conditionals, or complex expressions. Keep dependent fields defined after
-                        the scalar values they depend on.
+                        Here, <code>entry_count</code> controls the number of items, and
+                        <code>entries_offset</code> points to where the array begins relative to the selected base offset.
                     </p>
+                </div>
+            </section>
+
+            <section class="feature-section">
+                <div class="section-intro">
+                    <p class="eyebrow">Examples</p>
+                    <h2>Character animation block with dependent transform count</h2>
+                </div>
+
+                <ol class="schema-code schema-lines">
+                    <li><code>endian little</code></li>
+                    <li><code></code></li>
+                    <li><code>struct Transform {</code></li>
+                    <li><code>  f32 r00</code></li>
+                    <li><code>  f32 r01</code></li>
+                    <li><code>  f32 r02</code></li>
+                    <li><code>  f32 r10</code></li>
+                    <li><code>  f32 r11</code></li>
+                    <li><code>  f32 r12</code></li>
+                    <li><code>  f32 r20</code></li>
+                    <li><code>  f32 r21</code></li>
+                    <li><code>  f32 r22</code></li>
+                    <li><code>  f32 px</code></li>
+                    <li><code>  f32 py</code></li>
+                    <li><code>  f32 pz</code></li>
+                    <li><code>}</code></li>
+                    <li><code></code></li>
+                    <li><code>struct Action {</code></li>
+                    <li><code>  u16 numBones</code></li>
+                    <li><code>  u16 numFrames</code></li>
+                    <li><code>  Transform[numBones * numFrames] transforms</code></li>
+                    <li><code>}</code></li>
+                    <li><code></code></li>
+                    <li><code>struct Actor {</code></li>
+                    <li><code>  u16 numAction</code></li>
+                    <li><code>  Action[numAction] actions</code></li>
+                    <li><code>}</code></li>
+                    <li><code></code></li>
+                    <li><code>root CharAni {</code></li>
+                    <li><code>  u32 numActors</code></li>
+                    <li><code>  Actor[numActors] actors</code></li>
+                    <li><code>}</code></li>
+                </ol>
+
+                <div class="guide-note">
+                    <p>
+                        This pattern is useful for animation formats where the payload count depends on
+                        more than one earlier field.
+                    </p>
+                </div>
+            </section>
+
+            <section class="feature-section" id="limits">
+                <div class="section-intro">
+                    <p class="eyebrow">Limits</p>
+                    <h2>What the current DSL does not support yet</h2>
+                </div>
+
+                <div class="guide-grid">
+                    <section class="guide-panel">
+                        <h3>Not supported</h3>
+                        <ul>
+                            <li>Dotted paths like <code>header.count</code></li>
+                            <li>Conditional fields</li>
+                            <li>Unions</li>
+                            <li>Cross-scope references</li>
+                            <li>Named enums or bitfields</li>
+                        </ul>
+                    </section>
+                    <section class="guide-panel">
+                        <h3>Authoring rule</h3>
+                        <ul>
+                            <li>Define dependent fields after the scalar values they depend on</li>
+                            <li>Keep references within the same struct scope</li>
+                        </ul>
+                    </section>
                 </div>
             </section>
         </main>
