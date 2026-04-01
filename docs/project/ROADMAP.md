@@ -1,84 +1,86 @@
 # Roadmap
 
-## Milestone 0: Foundation
+## Current Status
 
-- workspace and crate boundaries
-- Qt main window shell
-- core domain types
-- initial bridge layer
-- documentation set
+Hex Master has moved past the scaffold stage. The repository now contains a functional Windows desktop application with versioning, CI, release automation, and a public Pages site.
 
-Exit criteria:
+The roadmap below focuses on the work still worth doing after the current 1.0 baseline.
 
-- repository builds with `cargo check`
-- shell skeleton is present
-- product and architecture decisions are documented
+## 1.0 Baseline
 
-## Milestone 1: Read-Only Browser
+Already in place:
 
-- open file flow
-- file metadata
-- visible range reads
-- custom hex viewport skeleton
-- navigation, selection, go-to-offset
-- bookmarks
+- Qt desktop shell over a Rust backend
+- hex and text pane editing
+- insert and overwrite modes
+- structural insert, delete, cut, and paste
+- search, replace, and search results navigation
+- inspector and checksum/hash docks
+- recent files, settings, session restore, and About dialog
+- unified versioning and GitHub release infrastructure
 
-Exit criteria:
+## Next Milestone: Responsiveness
 
-- browse large files comfortably in read-only mode
+Priority work:
 
-## Milestone 2: Editing Core
-
-- piece table
-- insert, overwrite, delete, replace
-- undo/redo
-- clipboard support
-- dirty state tracking
+- move long-running search work off the UI thread
+- move hash and analysis work off the UI thread
+- add progress reporting and cancellation
+- avoid visible UI stalls during large replace-all and analysis operations
 
 Exit criteria:
 
-- large files can be edited without whole-file RAM residency
+- large searches and hashes no longer feel like the app is frozen
+- the UI provides progress or at least a cancelable job state for heavy work
 
-## Milestone 3: Save and Hardening
+## Following Milestone: Editing Scalability
 
-- save/save as
-- temp-file replacement
-- recovery-oriented error handling
-- integration tests for save correctness
+Priority work:
 
-## Milestone 4: Search and Replace
+- improve the structural editing model for very large files
+- reduce full-buffer materialization pressure after repeated insert/delete operations
+- harden undo/redo behavior under larger edit sessions
 
-- byte pattern search
-- text search in multiple encodings
-- results list
-- replace current/all
-- cancelable background jobs
+Exit criteria:
 
-## Milestone 5: V1 Polish
+- repeated structural edits remain practical on larger inputs
+- memory growth is better bounded during long edit sessions
 
-- inspector
-- hashes
-- settings
-- session restore
-- shortcut polish
-- packaging
+## Following Milestone: Distribution Hardening
 
-## Milestone 6: V1.5
+Priority work:
+
+- Windows installer packaging
+- release signing strategy
+- cleaner runtime dependency bundling
+- clearer release notes generated from the changelog
+
+Exit criteria:
+
+- public Windows releases are easy to install and update
+- release assets and metadata look professional
+
+## Following Milestone: Reliability
+
+Priority work:
+
+- crash recovery and autosave
+- more integration coverage around save correctness and replace workflows
+- edge-case QA for read-only, encoding, and large-file scenarios
+
+Exit criteria:
+
+- recovery expectations are documented and implemented
+- release confidence is based on broader automated and manual coverage
+
+## Longer-Term Exploration
+
+Possible future features after the 1.x stability work:
 
 - binary diff
-- histogram
-- entropy view
-- export/import helpers
+- entropy and histogram views
 - annotations
-
-## Milestone 7: V2
-
 - templates
-- scripting
-- format-aware inspectors
+- scripting or plugin hooks
 
-## Milestone 8: V3
-
-- plugin API
-- advanced workflows
-- optional device/process features
+These remain optional product-expansion work, not prerequisites for cleaning up the current release line.

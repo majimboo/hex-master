@@ -1,90 +1,112 @@
 # Architecture
 
-## High-Level Shape
+## Overview
 
-The application is split into a Rust core and a Qt desktop shell.
+Hex Master is a Windows-first desktop hex editor built as a Qt application over a Rust core.
 
-- Rust owns document state, editing, file I/O, search, analysis, and typed decoding.
-- Qt owns rendering, input, menus, docks, dialogs, and platform-native desktop behavior.
-- The bridge between them stays narrow.
+- Qt owns the desktop shell: menus, docks, dialogs, status bar, search panels, inspector presentation, and the custom hex view widget.
+- Rust owns the document state, editing operations, file persistence, search helpers, inspector decoding, checksums, and session-oriented state exposed through the FFI bridge.
+- The bridge stays intentionally narrow so the UI can remain native without duplicating editing logic.
 
-## Rust Modules
+## Repository Layout
 
-### `hexapp-core`
+- `apps/desktop`: Qt desktop application
+- `apps/bootstrap`: small Rust bootstrap crate
+- `crates/hexapp-core`: shared document and selection primitives
+- `crates/hexapp-io`: file-backed document I/O and save handling
+- `crates/hexapp-search`: search query and replace helpers
+- `crates/hexapp-analysis`: checksum and hash helpers
+- `crates/hexapp-inspector`: typed interpretation helpers
+- `crates/hexapp-session`: recent files and session persistence
+- `crates/hexapp-ffi`: Rust bridge consumed by the desktop app
 
-- byte offsets and ranges
-- selection and caret model
-- bookmarks
-- document summary and lifecycle state
-- edit command model
+## Desktop Layer
 
-### `hexapp-io`
+The desktop app lives in `apps/desktop` and is built around a custom `HexView` widget rather than a generic table control.
 
-- file source abstraction
-- metadata and open strategy
-- paged reads
-- future page cache and save pipeline
+Current desktop responsibilities:
 
-### `hexapp-search`
+- viewport layout and painting
+- offset-to-cell hit testing
+- synchronized hex and text panes
+- caret and selection rendering
+- insert versus overwrite interaction
+- menus, toolbars, dialogs, and docks
+- search results table and navigation
+- about box, settings, recent files, and session restore
 
-- byte pattern queries
-- text queries by encoding
-- replace operations
-- background search job state
+## Rust Layer
 
-### `hexapp-analysis`
+The Rust side is split into focused crates, but today the most important public surface is the FFI document handle used by the desktop shell.
 
-- hash requests and results
-- background analysis job model
+Current Rust responsibilities:
 
-### `hexapp-inspector`
+- open existing files and create new buffers
+- read ranges for the visible viewport
+- overwrite, insert, and delete byte ranges
+- undo and redo sequencing
+- save and save-as flows
+- typed search pattern generation
+- checksum and hash computation
+- inspector decoding for integer, float, and time views
 
-- typed value decoding
-- endianness
-- inspector rows shown in the UI
+## Current Document Model
 
-### `hexapp-session`
+The editor now supports structural insert and delete operations, but it is not yet the final large-file editing architecture.
 
-- recent file list
-- window/session settings
+Current behavior:
 
-### `hexapp-ffi`
+- file-backed read access through the Rust layer
+- mutable in-memory editing state exposed through FFI
+- overwrite, insert, delete, cut, paste, fill, and replace operations
+- safer same-path save flow using a temporary output and replacement step
 
-- Rust-owned app state exposed to the desktop shell
-- thin API for opening documents, listing recent files, and reporting summaries
+Current limitation:
 
-## Document Model
+- the implementation is functional for normal editing workflows, but it is not yet a piece-table or similarly scalable edit overlay tuned for very large structural edit workloads
 
-The long-term document model is:
+## Search and Analysis
 
-- immutable base source
-- append-only add buffer
-- piece descriptors that reference either the base file or add buffer
+Current search features:
 
-That allows efficient inserts, deletes, replaces, and undo operations without materializing the entire document in memory.
+- raw hex-byte search
+- text search with multiple encodings
+- typed-value search for integer and floating-point values
+- replace next and replace all
+- search-in-selection scope
+- results table with offsets, previews, and range navigation
 
-## Read Path
+Current analysis features:
 
-- read-only access may use `mmap` when advantageous
-- cross-platform fallback uses paged reads
-- visible viewport requests go through a byte-range API
+- CRC32
+- MD5
+- SHA-1
+- SHA-256
 
-## Save Path
+Current limitation:
 
-- write to temporary output
-- flush and validate
-- replace original atomically when the platform supports it
+- long-running search and analysis work still uses synchronous execution with visible busy feedback rather than fully asynchronous background jobs with progress and cancel
 
-## UI Model
+## Save and Recovery Model
 
-The central hex viewport is a custom widget rather than a table/grid control.
+Current save expectations:
 
-It is responsible for:
+- save and save-as are supported
+- same-path save uses a temp-file replacement flow instead of deleting the original first
+- dirty-state prompts protect against losing unsaved changes when opening, creating, or closing documents
 
-- row and column layout
-- offset-to-cell mapping
-- cell-to-offset hit testing
-- selection painting
-- caret painting
-- synchronized hex and ASCII panes
-- smooth scrolling across very large logical row counts
+Still missing:
+
+- crash recovery and autosave
+- broader release-grade fault-injection and stress testing
+
+## Versioning and Release Metadata
+
+Application version is defined once in `apps/desktop/CMakeLists.txt`.
+
+That version feeds:
+
+- Qt application metadata
+- About dialog version display
+- Windows executable version information
+- release archive naming in GitHub automation

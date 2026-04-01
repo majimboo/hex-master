@@ -1,57 +1,74 @@
-# MVP Checklist
+# Release Readiness Checklist
 
-## Editor
+This file tracks the public-release baseline rather than the original scaffold MVP.
 
-- [ ] Open file
-- [ ] New buffer
-- [ ] Save
-- [ ] Save As
-- [ ] Read-only mode
-- [ ] Insert mode
-- [ ] Overwrite mode
-- [ ] Selection and caret
-- [ ] Undo/redo
-- [ ] Copy/cut/paste
-- [ ] Paste parsed hex text
-- [ ] Fill range
-- [ ] Go to offset
-- [ ] Bookmarks
+## Editor Core
 
-## Search
+- [x] Open file
+- [x] New buffer
+- [x] Save
+- [x] Save As
+- [x] Read-only handling
+- [x] Insert mode
+- [x] Overwrite mode
+- [x] Selection and caret
+- [x] Undo/redo
+- [x] Copy/cut/paste
+- [x] Paste parsed hex text
+- [x] Fill range
+- [x] Go to offset
+- [x] Bookmarks
 
-- [ ] Find bytes
-- [ ] Find text
-- [ ] Search in selection
-- [ ] Replace current
-- [ ] Replace all
-- [ ] Progress and cancel
+## Search and Replace
 
-## Inspector
+- [x] Find bytes
+- [x] Find text
+- [x] Find typed values
+- [x] Search in selection
+- [x] Find next
+- [x] Find all
+- [x] Replace next
+- [x] Replace all
+- [ ] Background progress and cancel
 
-- [ ] Signed integers
-- [ ] Unsigned integers
-- [ ] Floats
-- [ ] Endianness switch
-- [ ] Timestamps
+## Inspector and Analysis
 
-## Analysis
-
-- [ ] CRC32
-- [ ] MD5
-- [ ] SHA-1
-- [ ] SHA-256
+- [x] Signed integers
+- [x] Unsigned integers
+- [x] Floats
+- [x] Endianness switch
+- [x] Timestamps
+- [x] CRC32
+- [x] MD5
+- [x] SHA-1
+- [x] SHA-256
 
 ## Desktop UX
 
-- [ ] Recent files
-- [ ] Settings
-- [ ] Session restore
-- [ ] Status bar
-- [ ] Dock layout
-- [ ] Keyboard shortcuts
+- [x] Recent files
+- [x] Settings
+- [x] Session restore
+- [x] Status bar
+- [x] Dock layout persistence
+- [x] Keyboard shortcuts
+- [x] About dialog
+- [x] Embedded app icon
 
-## Reliability
+## Release Engineering
 
-- [ ] Temp-file save
-- [ ] UI thread never blocks on long operations
-- [ ] Integration tests for edit and save correctness
+- [x] Single-source versioning
+- [x] Windows executable version metadata
+- [x] GitHub Actions CI
+- [x] GitHub release workflow
+- [x] GitHub Pages site
+- [x] Public README
+- [x] Changelog
+
+## Remaining Commercialization Work
+
+- [ ] Installer packaging
+- [ ] Code signing
+- [ ] Crash recovery / autosave
+- [ ] Background jobs for heavy operations
+- [ ] Larger-file structural edit scalability
+- [ ] Broader release QA

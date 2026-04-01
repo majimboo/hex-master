@@ -1,68 +1,94 @@
 # Product Spec
 
-## Goal
+## Product Definition
 
-Build a modern desktop hex editor with the speed and large-file handling expected from classic native tools, while using a safer and more maintainable architecture.
+Hex Master is a desktop hex editor for inspecting and editing binary data on Windows, with a Rust core and a Qt user interface.
 
-## Product Principles
+It is positioned as a modern native alternative to older Windows hex editors such as Hex Workshop for workflows involving:
 
-- Open huge files without loading the whole file into memory.
-- Keep scrolling, selection, and navigation responsive.
-- Make editing safe and crash-resistant.
-- Preserve dense, keyboard-first desktop workflows.
-- Keep the core portable and the UI native.
+- executable inspection
+- firmware and ROM editing
+- save-file and asset editing
+- reverse-engineering support work
+- direct byte-level patching of custom formats
+
+## Product Goals
+
+- Keep the editor responsive for real desktop workflows.
+- Support both hex-side and text-side editing.
+- Make structural edits possible, not only fixed-length overwrites.
+- Preserve dense keyboard-first workflows expected from classic native editors.
+- Keep the implementation maintainable by separating native UI concerns from core editing logic.
 
 ## Target Users
 
-- Reverse engineers
-- Embedded developers
-- File format developers
-- Security researchers
-- Power users working directly with binary data
+- reverse engineers
+- embedded and firmware developers
+- file-format developers
+- security researchers
+- technical users who inspect or patch binary files directly
 
-## V1 Scope
+## Current Release Scope
 
-- Open existing files and create new buffers
-- Read-only mode
-- Insert and overwrite modes
-- Hex pane plus ASCII/text pane
-- Offset gutter
-- Selection and caret navigation
-- Undo and redo
-- Copy, cut, paste
-- Paste from parsed hex text
-- Fill selected range
-- Go to offset
-- Bookmarks
-- Find and replace
-- Text search with multiple encodings
-- Data inspector
-- Checksums and hashes
-- Recent files
-- Settings and session restore
-- Crash-safe save flow
+The current release line is centered on a functional Windows desktop editor with these capabilities:
 
-## Deferred Beyond V1
+- open existing files and create new buffers
+- save, save as, and read-only aware workflows
+- hex pane and text pane editing
+- insert and overwrite modes
+- structural insert, delete, cut, and paste
+- undo and redo
+- go-to-offset and bookmark navigation
+- recent files, persistent settings, and session restore
+- inspector views for integer, floating-point, and time interpretations
+- checksum and hash tools
+- search by text, hex bytes, and typed values
+- replace next and replace all
+- search results table with result navigation
 
-- Binary diff
-- Entropy and histogram views
-- Binary templates
-- Scripting
-- Plugin API
-- Device and process memory editing
+## Public Positioning
 
-## Performance Targets
+What the project should claim publicly today:
 
-- Initial viewport should become interactive without a full-file read.
-- Memory usage must scale with viewport cache, edit history, and UI state rather than file size.
-- Multi-GB files must remain navigable and searchable without freezing the UI.
-- Public document offsets must use `u64`.
+- functional Windows desktop hex editor
+- modern alternative in spirit to classic native Windows hex tools
+- Rust core with Qt desktop shell
+- source available, with automated Windows builds and tagged releases
 
-## Large File Strategy
+What the project should not overclaim yet:
 
-- File-backed document source
-- Optional `mmap` path for read-heavy access
-- Paged read fallback with LRU cache
-- Piece-table style edit overlay
-- Background search and analysis jobs
-- Temp-file save and atomic replace where possible
+- fully proven large-file editing architecture on par with mature commercial editors
+- non-blocking background execution for every heavy operation
+- installer-based Windows distribution
+- cross-platform packaged releases
+
+## Non-Goals for 1.x
+
+These are intentionally outside the immediate release line:
+
+- binary diff/merge workflows
+- entropy and histogram visualizations
+- binary templates
+- scripting
+- plugin API
+- device memory or live process editing
+
+## Quality Expectations
+
+The public 1.x line should meet these baseline expectations:
+
+- no silent data loss in normal save/open/close flows
+- clear dirty-state prompts
+- stable executable naming and version metadata
+- searchable and buildable public repository
+- tagged release artifacts published through GitHub
+
+## Remaining Product Gaps
+
+The main gaps still worth calling out in planning documents are:
+
+- background worker jobs with progress and cancel for long searches and analysis
+- more scalable structural editing architecture for very large edit sessions
+- installer packaging and signing
+- crash recovery and autosave
+- broader QA and release hardening
