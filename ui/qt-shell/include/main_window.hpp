@@ -54,6 +54,11 @@ private:
         Big,
     };
 
+    enum class SearchExecution {
+        FindNext,
+        FindAll,
+    };
+
     void setup_menu();
     void setup_central_widget();
     void setup_docks();
@@ -83,6 +88,7 @@ private:
     void fill_selection();
     void compute_hashes();
     void open_settings();
+    void show_about();
     void set_insert_mode();
     void set_overwrite_mode();
     void go_to_offset();
@@ -91,7 +97,6 @@ private:
     void next_bookmark();
     void previous_bookmark();
     void find();
-    void find_all();
     void find_in_selection();
     void find_next();
     void find_previous();
@@ -107,7 +112,21 @@ private:
     void show_search_summary(const QString& summary);
     void show_search_matches(const QString& summary, const QVector<qint64>& matches);
     void activate_search_result_item();
-    bool prompt_for_search_pattern(const QString& title, const QString& label, QByteArray& pattern, bool& hex_mode, QString* display_text = nullptr);
+    bool prompt_for_replace_operation(
+        QByteArray& before,
+        QByteArray& after,
+        bool& find_hex_mode,
+        SearchExecution& execution,
+        bool& selection_only);
+    bool prompt_for_search_pattern(
+        const QString& title,
+        const QString& label,
+        QByteArray& pattern,
+        bool& hex_mode,
+        SearchExecution* execution = nullptr,
+        bool* selection_only = nullptr,
+        bool default_selection_only = false,
+        QString* display_text = nullptr);
     static QByteArray encode_search_text(const QString& text, SearchTextEncoding encoding);
     static QString encoding_label(SearchTextEncoding encoding);
     static QString numeric_type_label(NumericSearchType type);
@@ -148,12 +167,9 @@ private:
     QAction* next_bookmark_action_ = nullptr;
     QAction* previous_bookmark_action_ = nullptr;
     QAction* find_action_ = nullptr;
-    QAction* find_all_action_ = nullptr;
-    QAction* find_in_selection_action_ = nullptr;
     QAction* find_next_action_ = nullptr;
     QAction* find_previous_action_ = nullptr;
     QAction* replace_action_ = nullptr;
-    QAction* replace_all_action_ = nullptr;
     QAction* recent_files_separator_ = nullptr;
     QActionGroup* row_width_group_ = nullptr;
     QActionGroup* inspector_endian_group_ = nullptr;

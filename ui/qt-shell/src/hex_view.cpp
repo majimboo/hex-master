@@ -645,6 +645,28 @@ void HexView::go_to_offset(qint64 offset) {
     move_caret(offset, false);
 }
 
+void HexView::select_range(qint64 offset, qint64 length) {
+    if (!has_document()) {
+        return;
+    }
+
+    if (length <= 0) {
+        go_to_offset(offset);
+        return;
+    }
+
+    const qint64 start = clamp_offset(offset);
+    const qint64 end = clamp_offset(offset + length - 1);
+    selection_anchor_ = start;
+    selection_active_ = start != end;
+    caret_offset_ = end;
+    high_nibble_pending_ = true;
+    pending_insert_high_nibble_ = -1;
+    ensure_caret_visible();
+    emit_status();
+    viewport()->update();
+}
+
 HexView::EditMode HexView::edit_mode() const {
     return edit_mode_;
 }

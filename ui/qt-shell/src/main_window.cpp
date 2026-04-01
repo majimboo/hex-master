@@ -20,9 +20,10 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QCheckBox>
+#include <QGroupBox>
 #include <QFormLayout>
 #include <QComboBox>
-#include <QRadioButton>
+#include <QStackedWidget>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QSettings>
@@ -110,12 +111,6 @@ void MainWindow::setup_menu() {
     find_action_ = searchMenu->addAction("&Find...");
     find_action_->setShortcut(QKeySequence::Find);
     connect(find_action_, &QAction::triggered, this, &MainWindow::find);
-    find_all_action_ = searchMenu->addAction("Find &All...");
-    find_all_action_->setShortcut(QKeySequence(QStringLiteral("Ctrl+Alt+F")));
-    connect(find_all_action_, &QAction::triggered, this, &MainWindow::find_all);
-    find_in_selection_action_ = searchMenu->addAction("Find In &Selection");
-    find_in_selection_action_->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+F")));
-    connect(find_in_selection_action_, &QAction::triggered, this, &MainWindow::find_in_selection);
     find_next_action_ = searchMenu->addAction("Find &Next");
     find_next_action_->setShortcut(QKeySequence::FindNext);
     connect(find_next_action_, &QAction::triggered, this, &MainWindow::find_next);
@@ -125,8 +120,6 @@ void MainWindow::setup_menu() {
     replace_action_ = searchMenu->addAction("&Replace...");
     replace_action_->setShortcut(QKeySequence::Replace);
     connect(replace_action_, &QAction::triggered, this, &MainWindow::replace);
-    replace_all_action_ = searchMenu->addAction("Replace &All...");
-    connect(replace_all_action_, &QAction::triggered, this, &MainWindow::replace_all);
 
     auto* viewMenu = menuBar()->addMenu("&View");
     viewMenu->addAction(inspector_dock_->toggleViewAction());
@@ -162,7 +155,9 @@ void MainWindow::setup_menu() {
     connect(compute_hashes_action_, &QAction::triggered, this, &MainWindow::compute_hashes);
     settings_action_ = tools_menu->addAction("&Settings...");
     connect(settings_action_, &QAction::triggered, this, &MainWindow::open_settings);
-    menuBar()->addMenu("&Help");
+    auto* help_menu = menuBar()->addMenu("&Help");
+    auto* about_action = help_menu->addAction("&About Hex Master");
+    connect(about_action, &QAction::triggered, this, &MainWindow::show_about);
 }
 
 void MainWindow::setup_recent_files_menu(QMenu* file_menu) {
@@ -761,6 +756,20 @@ void MainWindow::open_settings() {
     statusBar()->showMessage(QStringLiteral("Settings updated."), 2500);
 }
 
+void MainWindow::show_about() {
+    QMessageBox::about(
+        this,
+        QStringLiteral("About Hex Master"),
+        QStringLiteral(
+            "<b>Hex Master</b><br>"
+            "Version %1<br><br>"
+            "Created by Majid Siddiqui<br>"
+            "me@majidarif.com<br><br>"
+            "2026<br><br>"
+            "A desktop hex editor built with Qt and Rust.")
+            .arg(QApplication::applicationVersion()));
+}
+
 void MainWindow::set_insert_mode() {
     if (hex_view_ != nullptr) {
         hex_view_->set_edit_mode(HexView::EditMode::Insert);
@@ -778,40 +787,52 @@ bool MainWindow::prompt_for_search_pattern(
     const QString& label,
     QByteArray& pattern,
     bool& hex_mode,
+    SearchExecution* execution,
+    bool* selection_only,
+    bool default_selection_only,
     QString* display_text) {
     QDialog dialog(this);
     dialog.setWindowTitle(title);
+    dialog.resize(520, 0);
 
     auto* root = new QVBoxLayout(&dialog);
-    auto* form = new QFormLayout();
-    root->addLayout(form);
+    auto* pattern_group = new QGroupBox(QStringLiteral("Pattern"), &dialog);
+    auto* pattern_form = new QFormLayout(pattern_group);
+    root->addWidget(pattern_group);
 
-    auto* text_input = new QLineEdit(&dialog);
+    auto* text_input = new QLineEdit(pattern_group);
     text_input->setClearButtonEnabled(true);
     text_input->setText(last_search_display_text_);
 
-    auto* mode_row = new QWidget(&dialog);
-    auto* mode_layout = new QHBoxLayout(mode_row);
-    mode_layout->setContentsMargins(0, 0, 0, 0);
-    auto* text_mode = new QRadioButton(QStringLiteral("Text"), mode_row);
-    auto* hex_mode_button = new QRadioButton(QStringLiteral("Hex"), mode_row);
-    auto* value_mode = new QRadioButton(QStringLiteral("Value"), mode_row);
-    text_mode->setChecked(last_search_input_mode_ == SearchInputMode::Text);
-    hex_mode_button->setChecked(last_search_input_mode_ == SearchInputMode::Hex);
-    value_mode->setChecked(last_search_input_mode_ == SearchInputMode::Value);
-    mode_layout->addWidget(text_mode);
-    mode_layout->addWidget(hex_mode_button);
-    mode_layout->addWidget(value_mode);
-    mode_layout->addStretch(1);
+    auto* mode_combo = new QComboBox(pattern_group);
+    mode_combo->addItem(QStringLiteral("Text"), static_cast<int>(SearchInputMode::Text));
+    mode_combo->addItem(QStringLiteral("Hex Bytes"), static_cast<int>(SearchInputMode::Hex));
+    mode_combo->addItem(QStringLiteral("Typed Value"), static_cast<int>(SearchInputMode::Value));
+    mode_combo->setCurrentIndex(mode_combo->findData(static_cast<int>(last_search_input_mode_)));
 
-    auto* encoding_combo = new QComboBox(&dialog);
+    auto* options_stack = new QStackedWidget(pattern_group);
+
+    auto* text_page = new QWidget(options_stack);
+    auto* text_form = new QFormLayout(text_page);
+    auto* encoding_combo = new QComboBox(text_page);
     encoding_combo->addItem(encoding_label(SearchTextEncoding::Ascii), static_cast<int>(SearchTextEncoding::Ascii));
     encoding_combo->addItem(encoding_label(SearchTextEncoding::Utf8), static_cast<int>(SearchTextEncoding::Utf8));
     encoding_combo->addItem(encoding_label(SearchTextEncoding::Utf16Le), static_cast<int>(SearchTextEncoding::Utf16Le));
     encoding_combo->addItem(encoding_label(SearchTextEncoding::Utf16Be), static_cast<int>(SearchTextEncoding::Utf16Be));
     encoding_combo->setCurrentIndex(encoding_combo->findData(static_cast<int>(last_search_text_encoding_)));
+    text_form->addRow(QStringLiteral("Text encoding"), encoding_combo);
+    options_stack->addWidget(text_page);
 
-    auto* numeric_type_combo = new QComboBox(&dialog);
+    auto* hex_page = new QWidget(options_stack);
+    auto* hex_form = new QFormLayout(hex_page);
+    auto* hex_hint = new QLabel(QStringLiteral("Search for raw byte sequences like `DE AD BE EF` or `0xDEADBEEF`."), hex_page);
+    hex_hint->setWordWrap(true);
+    hex_form->addRow(QStringLiteral("Hex mode"), hex_hint);
+    options_stack->addWidget(hex_page);
+
+    auto* value_page = new QWidget(options_stack);
+    auto* value_form = new QFormLayout(value_page);
+    auto* numeric_type_combo = new QComboBox(value_page);
     numeric_type_combo->addItem(numeric_type_label(NumericSearchType::Unsigned8), static_cast<int>(NumericSearchType::Unsigned8));
     numeric_type_combo->addItem(numeric_type_label(NumericSearchType::Signed8), static_cast<int>(NumericSearchType::Signed8));
     numeric_type_combo->addItem(numeric_type_label(NumericSearchType::Unsigned16), static_cast<int>(NumericSearchType::Unsigned16));
@@ -824,27 +845,57 @@ bool MainWindow::prompt_for_search_pattern(
     numeric_type_combo->addItem(numeric_type_label(NumericSearchType::Float64), static_cast<int>(NumericSearchType::Float64));
     numeric_type_combo->setCurrentIndex(numeric_type_combo->findData(static_cast<int>(last_search_numeric_type_)));
 
-    auto* endian_combo = new QComboBox(&dialog);
+    auto* endian_combo = new QComboBox(value_page);
     endian_combo->addItem(QStringLiteral("Little Endian"), static_cast<int>(SearchByteOrder::Little));
     endian_combo->addItem(QStringLiteral("Big Endian"), static_cast<int>(SearchByteOrder::Big));
     endian_combo->setCurrentIndex(endian_combo->findData(static_cast<int>(last_search_numeric_byte_order_)));
+    value_form->addRow(QStringLiteral("Value type"), numeric_type_combo);
+    value_form->addRow(QStringLiteral("Byte order"), endian_combo);
+    options_stack->addWidget(value_page);
 
-    auto update_mode_widgets = [=]() {
-        const bool text_selected = text_mode->isChecked();
-        const bool value_selected = value_mode->isChecked();
-        encoding_combo->setEnabled(text_selected);
-        numeric_type_combo->setEnabled(value_selected);
-        endian_combo->setEnabled(value_selected);
+    pattern_form->addRow(label, text_input);
+    pattern_form->addRow(QStringLiteral("Interpret as"), mode_combo);
+    pattern_form->addRow(QStringLiteral("Mode options"), options_stack);
+
+    QComboBox* action_combo = nullptr;
+    auto* options_group = new QGroupBox(QStringLiteral("Search Options"), &dialog);
+    auto* options_form = new QFormLayout(options_group);
+    root->addWidget(options_group);
+
+    if (execution != nullptr) {
+        action_combo = new QComboBox(options_group);
+        action_combo->addItem(QStringLiteral("Find Next"), static_cast<int>(SearchExecution::FindNext));
+        action_combo->addItem(QStringLiteral("Find All"), static_cast<int>(SearchExecution::FindAll));
+        action_combo->setCurrentIndex(action_combo->findData(static_cast<int>(*execution)));
+        options_form->addRow(QStringLiteral("Action"), action_combo);
+    }
+
+    QCheckBox* selection_only_check = nullptr;
+    if (selection_only != nullptr && hex_view_ != nullptr && hex_view_->has_selection()) {
+        selection_only_check = new QCheckBox(QStringLiteral("Search in selection only"), options_group);
+        selection_only_check->setChecked(default_selection_only);
+        options_form->addRow(QString(), selection_only_check);
+    }
+    if (action_combo == nullptr && selection_only_check == nullptr) {
+        options_group->hide();
+    }
+
+    auto update_mode_page = [=]() {
+        const SearchInputMode mode = static_cast<SearchInputMode>(mode_combo->currentData().toInt());
+        switch (mode) {
+        case SearchInputMode::Text:
+            options_stack->setCurrentWidget(text_page);
+            break;
+        case SearchInputMode::Hex:
+            options_stack->setCurrentWidget(hex_page);
+            break;
+        case SearchInputMode::Value:
+            options_stack->setCurrentWidget(value_page);
+            break;
+        }
     };
-    connect(text_mode, &QRadioButton::toggled, &dialog, update_mode_widgets);
-    connect(value_mode, &QRadioButton::toggled, &dialog, update_mode_widgets);
-    update_mode_widgets();
-
-    form->addRow(label, text_input);
-    form->addRow(QStringLiteral("Interpret as"), mode_row);
-    form->addRow(QStringLiteral("Text encoding"), encoding_combo);
-    form->addRow(QStringLiteral("Value type"), numeric_type_combo);
-    form->addRow(QStringLiteral("Byte order"), endian_combo);
+    connect(mode_combo, &QComboBox::currentIndexChanged, &dialog, update_mode_page);
+    update_mode_page();
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
     root->addWidget(buttons);
@@ -860,15 +911,16 @@ bool MainWindow::prompt_for_search_pattern(
         return false;
     }
 
-    hex_mode = !text_mode->isChecked();
+    const SearchInputMode selected_mode = static_cast<SearchInputMode>(mode_combo->currentData().toInt());
+    hex_mode = selected_mode != SearchInputMode::Text;
     QByteArray parsed;
-    if (hex_mode_button->isChecked()) {
+    if (selected_mode == SearchInputMode::Hex) {
         last_search_input_mode_ = SearchInputMode::Hex;
         if (!try_parse_hex_bytes(input, parsed)) {
             statusBar()->showMessage(QStringLiteral("Invalid hex byte sequence."), 3000);
             return false;
         }
-    } else if (text_mode->isChecked()) {
+    } else if (selected_mode == SearchInputMode::Text) {
         last_search_input_mode_ = SearchInputMode::Text;
         last_search_text_encoding_ = static_cast<SearchTextEncoding>(encoding_combo->currentData().toInt());
         parsed = encode_search_text(input, last_search_text_encoding_);
@@ -884,6 +936,12 @@ bool MainWindow::prompt_for_search_pattern(
 
     pattern = parsed;
     last_search_display_text_ = input;
+    if (execution != nullptr && action_combo != nullptr) {
+        *execution = static_cast<SearchExecution>(action_combo->currentData().toInt());
+    }
+    if (selection_only != nullptr) {
+        *selection_only = selection_only_check != nullptr && selection_only_check->isChecked();
+    }
     if (display_text != nullptr) {
         *display_text = input;
     }
@@ -1145,39 +1203,26 @@ void MainWindow::find() {
 
     QByteArray pattern;
     bool hex_mode = false;
-    if (!prompt_for_search_pattern(QStringLiteral("Find"), QStringLiteral("Pattern"), pattern, hex_mode)) {
+    SearchExecution execution = SearchExecution::FindNext;
+    bool selection_only = false;
+    if (!prompt_for_search_pattern(
+            QStringLiteral("Find"),
+            QStringLiteral("Pattern"),
+            pattern,
+            hex_mode,
+            &execution,
+            &selection_only,
+            false)) {
         return;
     }
 
     last_search_hex_mode_ = hex_mode;
     last_search_pattern_ = pattern;
-    run_search(true, false);
-}
-
-void MainWindow::find_all() {
-    if (!hex_view_ || !hex_view_->has_document()) {
-        statusBar()->showMessage(QStringLiteral("Open a file before searching."), 2500);
-        return;
+    if (execution == SearchExecution::FindAll) {
+        run_find_all(selection_only);
+    } else {
+        run_search(true, false, selection_only);
     }
-
-    QByteArray pattern;
-    bool hex_mode = false;
-    if (!prompt_for_search_pattern(QStringLiteral("Find All"), QStringLiteral("Pattern"), pattern, hex_mode)) {
-        return;
-    }
-
-    last_search_hex_mode_ = hex_mode;
-    last_search_pattern_ = pattern;
-
-    const bool selection_only =
-        hex_view_->has_selection() &&
-        QMessageBox::question(
-            this,
-            QStringLiteral("Find All"),
-            QStringLiteral("Limit the find-all operation to the current selection?"),
-            QMessageBox::Yes | QMessageBox::No,
-            QMessageBox::Yes) == QMessageBox::Yes;
-    run_find_all(selection_only);
 }
 
 void MainWindow::find_in_selection() {
@@ -1188,13 +1233,26 @@ void MainWindow::find_in_selection() {
 
     QByteArray pattern;
     bool hex_mode = false;
-    if (!prompt_for_search_pattern(QStringLiteral("Find In Selection"), QStringLiteral("Pattern"), pattern, hex_mode)) {
+    SearchExecution execution = SearchExecution::FindNext;
+    bool selection_only = true;
+    if (!prompt_for_search_pattern(
+            QStringLiteral("Find"),
+            QStringLiteral("Pattern"),
+            pattern,
+            hex_mode,
+            &execution,
+            &selection_only,
+            true)) {
         return;
     }
 
     last_search_hex_mode_ = hex_mode;
     last_search_pattern_ = pattern;
-    run_search(true, false, true);
+    if (execution == SearchExecution::FindAll) {
+        run_find_all(selection_only);
+    } else {
+        run_search(true, false, selection_only);
+    }
 }
 
 void MainWindow::find_next() {
@@ -1211,45 +1269,47 @@ void MainWindow::replace() {
         return;
     }
 
+    if (hex_view_->is_read_only()) {
+        statusBar()->showMessage(QStringLiteral("Document is read-only."), 2500);
+        return;
+    }
+
     QByteArray before;
-    bool hex_mode = false;
-    if (!prompt_for_search_pattern(QStringLiteral("Replace"), QStringLiteral("Find pattern"), before, hex_mode)) {
-        return;
-    }
-
-    bool accepted = false;
-    const QString replace_text = QInputDialog::getText(
-        this,
-        QStringLiteral("Replace"),
-        QStringLiteral("Replace with (same length only in current overwrite mode):"),
-        QLineEdit::Normal,
-        QString(),
-        &accepted);
-    if (!accepted) {
-        return;
-    }
-
     QByteArray after;
-    if (hex_mode) {
-        if (!try_parse_hex_bytes(replace_text, after)) {
-            statusBar()->showMessage(QStringLiteral("Replacement must be valid hex bytes."), 3000);
-            return;
-        }
-    } else {
-        after = encode_search_text(replace_text, last_search_text_encoding_);
-    }
-
-    if (hex_view_->edit_mode() == HexView::EditMode::Overwrite && before.size() != after.size()) {
-        statusBar()->showMessage(QStringLiteral("Replacement must match the original length in overwrite mode."), 4000);
+    bool hex_mode = false;
+    SearchExecution execution = SearchExecution::FindNext;
+    bool selection_only = false;
+    if (!prompt_for_replace_operation(before, after, hex_mode, execution, selection_only)) {
         return;
     }
 
     last_search_pattern_ = before;
     last_search_hex_mode_ = hex_mode;
 
+    if (execution == SearchExecution::FindAll) {
+        const qint64 replaced = hex_view_->replace_all(before, after, selection_only);
+        if (replaced <= 0) {
+            statusBar()->showMessage(QStringLiteral("No matches replaced."), 2500);
+            return;
+        }
+
+        show_search_summary(
+            QStringLiteral("Replaced %1 occurrence(s)%2.")
+                .arg(replaced)
+                .arg(selection_only ? QStringLiteral(" in the current selection") : QString()));
+        statusBar()->showMessage(QStringLiteral("Replaced %1 occurrence(s).").arg(replaced), 3000);
+        return;
+    }
+
     qint64 found_offset = -1;
-    if (!hex_view_->find_pattern(before, true, true, &found_offset)) {
-        if (!hex_view_->find_pattern(before, true, false, &found_offset)) {
+    const bool found = selection_only
+        ? hex_view_->find_pattern_in_selection(before, true, true, &found_offset)
+        : hex_view_->find_pattern(before, true, true, &found_offset);
+    if (!found) {
+        const bool fallback_found = selection_only
+            ? hex_view_->find_pattern_in_selection(before, true, false, &found_offset)
+            : hex_view_->find_pattern(before, true, false, &found_offset);
+        if (!fallback_found) {
             statusBar()->showMessage(QStringLiteral("No match available to replace."), 3000);
             return;
         }
@@ -1269,72 +1329,7 @@ void MainWindow::replace() {
 }
 
 void MainWindow::replace_all() {
-    if (!hex_view_ || !hex_view_->has_document()) {
-        statusBar()->showMessage(QStringLiteral("Open a file before replacing."), 2500);
-        return;
-    }
-
-    if (hex_view_->is_read_only()) {
-        statusBar()->showMessage(QStringLiteral("Document is read-only."), 2500);
-        return;
-    }
-
-    QByteArray before;
-    bool hex_mode = false;
-    if (!prompt_for_search_pattern(QStringLiteral("Replace All"), QStringLiteral("Find pattern"), before, hex_mode)) {
-        return;
-    }
-
-    bool accepted = false;
-    const QString replace_text = QInputDialog::getText(
-        this,
-        QStringLiteral("Replace All"),
-        QStringLiteral("Replace with (same length only in overwrite mode):"),
-        QLineEdit::Normal,
-        QString(),
-        &accepted);
-    if (!accepted) {
-        return;
-    }
-
-    QByteArray after;
-    if (hex_mode) {
-        if (!try_parse_hex_bytes(replace_text, after)) {
-            statusBar()->showMessage(QStringLiteral("Replacement must be valid hex bytes."), 3000);
-            return;
-        }
-    } else {
-        after = encode_search_text(replace_text, last_search_text_encoding_);
-    }
-
-    if (hex_view_->edit_mode() == HexView::EditMode::Overwrite && before.size() != after.size()) {
-        statusBar()->showMessage(QStringLiteral("Replacement must match the original length in overwrite mode."), 4000);
-        return;
-    }
-
-    const bool selection_only =
-        hex_view_->has_selection() &&
-        QMessageBox::question(
-            this,
-            QStringLiteral("Replace All"),
-            QStringLiteral("Limit the replace-all operation to the current selection?"),
-            QMessageBox::Yes | QMessageBox::No,
-            QMessageBox::Yes) == QMessageBox::Yes;
-
-    const qint64 replaced = hex_view_->replace_all(before, after, selection_only);
-    last_search_pattern_ = before;
-    last_search_hex_mode_ = hex_mode;
-
-    if (replaced <= 0) {
-        statusBar()->showMessage(QStringLiteral("No matches replaced."), 2500);
-        return;
-    }
-
-    show_search_summary(
-        QStringLiteral("Replaced %1 occurrence(s)%2.")
-            .arg(replaced)
-            .arg(selection_only ? QStringLiteral(" in the current selection") : QString()));
-    statusBar()->showMessage(QStringLiteral("Replaced %1 occurrence(s).").arg(replaced), 3000);
+    replace();
 }
 
 void MainWindow::set_inspector_little_endian() {
@@ -1447,6 +1442,7 @@ void MainWindow::show_search_matches(const QString& summary, const QVector<qint6
                 QStringLiteral("0x%1").arg(offset, 8, 16, QChar(u'0')).toUpper(),
                 QStringLiteral("Match %1").arg(index + 1)});
         item->setData(0, Qt::UserRole, offset);
+        item->setData(1, Qt::UserRole, last_search_pattern_.size());
     }
 
     if (matches.size() > max_results) {
@@ -1476,8 +1472,289 @@ void MainWindow::activate_search_result_item() {
     }
 
     const qint64 offset = offset_value.toLongLong();
-    hex_view_->go_to_offset(offset);
+    const qint64 match_length = item->data(1, Qt::UserRole).toLongLong();
+    if (match_length > 0) {
+        hex_view_->select_range(offset, match_length);
+    } else {
+        hex_view_->go_to_offset(offset);
+    }
     statusBar()->showMessage(QStringLiteral("Moved to search result at 0x%1").arg(offset, 0, 16), 2500);
+}
+
+bool MainWindow::prompt_for_replace_operation(
+    QByteArray& before,
+    QByteArray& after,
+    bool& find_hex_mode,
+    SearchExecution& execution,
+    bool& selection_only) {
+    QDialog dialog(this);
+    dialog.setWindowTitle(QStringLiteral("Replace"));
+    dialog.resize(560, 0);
+
+    auto* root = new QVBoxLayout(&dialog);
+
+    auto build_mode_section = [&](QWidget* parent,
+                                  const QString& title,
+                                  const QString& label,
+                                  const QString& initial_text,
+                                  SearchInputMode initial_mode,
+                                  SearchTextEncoding initial_encoding,
+                                  NumericSearchType initial_numeric_type,
+                                  SearchByteOrder initial_byte_order,
+                                  QLineEdit*& text_input,
+                                  QComboBox*& mode_combo,
+                                  QComboBox*& encoding_combo,
+                                  QComboBox*& numeric_type_combo,
+                                  QComboBox*& byte_order_combo) {
+        auto* group = new QGroupBox(title, parent);
+        auto* form = new QFormLayout(group);
+
+        text_input = new QLineEdit(group);
+        text_input->setClearButtonEnabled(true);
+        text_input->setText(initial_text);
+
+        mode_combo = new QComboBox(group);
+        mode_combo->addItem(QStringLiteral("Text"), static_cast<int>(SearchInputMode::Text));
+        mode_combo->addItem(QStringLiteral("Hex Bytes"), static_cast<int>(SearchInputMode::Hex));
+        mode_combo->addItem(QStringLiteral("Typed Value"), static_cast<int>(SearchInputMode::Value));
+        mode_combo->setCurrentIndex(mode_combo->findData(static_cast<int>(initial_mode)));
+
+        auto* options_stack = new QStackedWidget(group);
+
+        auto* text_page = new QWidget(options_stack);
+        auto* text_form = new QFormLayout(text_page);
+        encoding_combo = new QComboBox(text_page);
+        encoding_combo->addItem(encoding_label(SearchTextEncoding::Ascii), static_cast<int>(SearchTextEncoding::Ascii));
+        encoding_combo->addItem(encoding_label(SearchTextEncoding::Utf8), static_cast<int>(SearchTextEncoding::Utf8));
+        encoding_combo->addItem(encoding_label(SearchTextEncoding::Utf16Le), static_cast<int>(SearchTextEncoding::Utf16Le));
+        encoding_combo->addItem(encoding_label(SearchTextEncoding::Utf16Be), static_cast<int>(SearchTextEncoding::Utf16Be));
+        encoding_combo->setCurrentIndex(encoding_combo->findData(static_cast<int>(initial_encoding)));
+        text_form->addRow(QStringLiteral("Text encoding"), encoding_combo);
+        options_stack->addWidget(text_page);
+
+        auto* hex_page = new QWidget(options_stack);
+        auto* hex_form = new QFormLayout(hex_page);
+        auto* hex_hint = new QLabel(QStringLiteral("Use byte sequences like `4D 5A`, `DE AD BE EF`, or `0xCAFEBABE`."), hex_page);
+        hex_hint->setWordWrap(true);
+        hex_form->addRow(QStringLiteral("Hex mode"), hex_hint);
+        options_stack->addWidget(hex_page);
+
+        auto* value_page = new QWidget(options_stack);
+        auto* value_form = new QFormLayout(value_page);
+        numeric_type_combo = new QComboBox(value_page);
+        numeric_type_combo->addItem(numeric_type_label(NumericSearchType::Unsigned8), static_cast<int>(NumericSearchType::Unsigned8));
+        numeric_type_combo->addItem(numeric_type_label(NumericSearchType::Signed8), static_cast<int>(NumericSearchType::Signed8));
+        numeric_type_combo->addItem(numeric_type_label(NumericSearchType::Unsigned16), static_cast<int>(NumericSearchType::Unsigned16));
+        numeric_type_combo->addItem(numeric_type_label(NumericSearchType::Signed16), static_cast<int>(NumericSearchType::Signed16));
+        numeric_type_combo->addItem(numeric_type_label(NumericSearchType::Unsigned32), static_cast<int>(NumericSearchType::Unsigned32));
+        numeric_type_combo->addItem(numeric_type_label(NumericSearchType::Signed32), static_cast<int>(NumericSearchType::Signed32));
+        numeric_type_combo->addItem(numeric_type_label(NumericSearchType::Unsigned64), static_cast<int>(NumericSearchType::Unsigned64));
+        numeric_type_combo->addItem(numeric_type_label(NumericSearchType::Signed64), static_cast<int>(NumericSearchType::Signed64));
+        numeric_type_combo->addItem(numeric_type_label(NumericSearchType::Float32), static_cast<int>(NumericSearchType::Float32));
+        numeric_type_combo->addItem(numeric_type_label(NumericSearchType::Float64), static_cast<int>(NumericSearchType::Float64));
+        numeric_type_combo->setCurrentIndex(numeric_type_combo->findData(static_cast<int>(initial_numeric_type)));
+
+        byte_order_combo = new QComboBox(value_page);
+        byte_order_combo->addItem(QStringLiteral("Little Endian"), static_cast<int>(SearchByteOrder::Little));
+        byte_order_combo->addItem(QStringLiteral("Big Endian"), static_cast<int>(SearchByteOrder::Big));
+        byte_order_combo->setCurrentIndex(byte_order_combo->findData(static_cast<int>(initial_byte_order)));
+
+        value_form->addRow(QStringLiteral("Value type"), numeric_type_combo);
+        value_form->addRow(QStringLiteral("Byte order"), byte_order_combo);
+        options_stack->addWidget(value_page);
+
+        form->addRow(label, text_input);
+        form->addRow(QStringLiteral("Interpret as"), mode_combo);
+        form->addRow(QStringLiteral("Mode options"), options_stack);
+
+        auto update_mode_page = [=]() {
+            const SearchInputMode mode = static_cast<SearchInputMode>(mode_combo->currentData().toInt());
+            switch (mode) {
+            case SearchInputMode::Text:
+                options_stack->setCurrentWidget(text_page);
+                break;
+            case SearchInputMode::Hex:
+                options_stack->setCurrentWidget(hex_page);
+                break;
+            case SearchInputMode::Value:
+                options_stack->setCurrentWidget(value_page);
+                break;
+            }
+        };
+        connect(mode_combo, &QComboBox::currentIndexChanged, &dialog, update_mode_page);
+        update_mode_page();
+        root->addWidget(group);
+    };
+
+    QLineEdit* find_text_input = nullptr;
+    QComboBox* find_mode_combo = nullptr;
+    QComboBox* find_encoding_combo = nullptr;
+    QComboBox* find_numeric_type_combo = nullptr;
+    QComboBox* find_byte_order_combo = nullptr;
+    build_mode_section(
+        &dialog,
+        QStringLiteral("Find"),
+        QStringLiteral("Find pattern"),
+        last_search_display_text_,
+        last_search_input_mode_,
+        last_search_text_encoding_,
+        last_search_numeric_type_,
+        last_search_numeric_byte_order_,
+        find_text_input,
+        find_mode_combo,
+        find_encoding_combo,
+        find_numeric_type_combo,
+        find_byte_order_combo);
+
+    QLineEdit* replace_text_input = nullptr;
+    QComboBox* replace_mode_combo = nullptr;
+    QComboBox* replace_encoding_combo = nullptr;
+    QComboBox* replace_numeric_type_combo = nullptr;
+    QComboBox* replace_byte_order_combo = nullptr;
+    build_mode_section(
+        &dialog,
+        QStringLiteral("Replace With"),
+        QStringLiteral("Replace with"),
+        QString(),
+        SearchInputMode::Text,
+        last_search_text_encoding_,
+        last_search_numeric_type_,
+        last_search_numeric_byte_order_,
+        replace_text_input,
+        replace_mode_combo,
+        replace_encoding_combo,
+        replace_numeric_type_combo,
+        replace_byte_order_combo);
+
+    auto* options_group = new QGroupBox(QStringLiteral("Replace Options"), &dialog);
+    auto* options_form = new QFormLayout(options_group);
+    auto* action_combo = new QComboBox(options_group);
+    action_combo->addItem(QStringLiteral("Replace Next"), static_cast<int>(SearchExecution::FindNext));
+    action_combo->addItem(QStringLiteral("Replace All"), static_cast<int>(SearchExecution::FindAll));
+    action_combo->setCurrentIndex(action_combo->findData(static_cast<int>(execution)));
+    options_form->addRow(QStringLiteral("Action"), action_combo);
+
+    QCheckBox* selection_only_check = nullptr;
+    if (hex_view_ != nullptr && hex_view_->has_selection()) {
+        selection_only_check = new QCheckBox(QStringLiteral("Search in selection only"), options_group);
+        selection_only_check->setChecked(selection_only);
+        options_form->addRow(QString(), selection_only_check);
+    }
+    root->addWidget(options_group);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    root->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return false;
+    }
+
+    const QString find_text = find_text_input->text().trimmed();
+    const QString replace_text = replace_text_input->text().trimmed();
+    if (find_text.isEmpty()) {
+        statusBar()->showMessage(QStringLiteral("Enter a find pattern."), 3000);
+        return false;
+    }
+
+    auto encode_input = [&](const QString& text,
+                            QComboBox* mode_combo,
+                            QComboBox* encoding_combo,
+                            QComboBox* numeric_type_combo,
+                            QComboBox* byte_order_combo,
+                            QByteArray& bytes,
+                            SearchInputMode& saved_mode,
+                            SearchTextEncoding& saved_encoding,
+                            NumericSearchType& saved_numeric_type,
+                            SearchByteOrder& saved_byte_order) -> bool {
+        const SearchInputMode mode = static_cast<SearchInputMode>(mode_combo->currentData().toInt());
+        saved_mode = mode;
+        switch (mode) {
+        case SearchInputMode::Text:
+            saved_encoding = static_cast<SearchTextEncoding>(encoding_combo->currentData().toInt());
+            bytes = encode_search_text(text, saved_encoding);
+            return true;
+        case SearchInputMode::Hex:
+            return try_parse_hex_bytes(text, bytes);
+        case SearchInputMode::Value:
+            saved_numeric_type = static_cast<NumericSearchType>(numeric_type_combo->currentData().toInt());
+            saved_byte_order = static_cast<SearchByteOrder>(byte_order_combo->currentData().toInt());
+            return encode_numeric_search_value(text, saved_numeric_type, saved_byte_order, bytes);
+        }
+        return false;
+    };
+
+    SearchInputMode find_mode = last_search_input_mode_;
+    if (!encode_input(
+            find_text,
+            find_mode_combo,
+            find_encoding_combo,
+            find_numeric_type_combo,
+            find_byte_order_combo,
+            before,
+            find_mode,
+            last_search_text_encoding_,
+            last_search_numeric_type_,
+            last_search_numeric_byte_order_)) {
+        statusBar()->showMessage(QStringLiteral("Invalid find value."), 3000);
+        return false;
+    }
+
+    SearchInputMode replace_mode = SearchInputMode::Text;
+    SearchTextEncoding replace_encoding = last_search_text_encoding_;
+    NumericSearchType replace_numeric_type = last_search_numeric_type_;
+    SearchByteOrder replace_byte_order = last_search_numeric_byte_order_;
+    if (!encode_input(
+            replace_text,
+            replace_mode_combo,
+            replace_encoding_combo,
+            replace_numeric_type_combo,
+            replace_byte_order_combo,
+            after,
+            replace_mode,
+            replace_encoding,
+            replace_numeric_type,
+            replace_byte_order)) {
+        statusBar()->showMessage(QStringLiteral("Invalid replacement value."), 3000);
+        return false;
+    }
+
+    if (hex_view_->edit_mode() == HexView::EditMode::Overwrite && replace_mode == SearchInputMode::Hex) {
+        if (after.size() > before.size()) {
+            QMessageBox::warning(
+                this,
+                QStringLiteral("Replacement Too Long"),
+                QStringLiteral("Raw hex replacement cannot be longer than the source pattern in overwrite mode."));
+            return false;
+        }
+        if (after.size() < before.size()) {
+            const auto response = QMessageBox::question(
+                this,
+                QStringLiteral("Pad Replacement"),
+                QStringLiteral("The replacement byte sequence is shorter than the source. Pad the remaining bytes with 00?"),
+                QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel,
+                QMessageBox::Yes);
+            if (response == QMessageBox::Cancel) {
+                return false;
+            }
+            if (response == QMessageBox::Yes) {
+                after.append(QByteArray(before.size() - after.size(), '\0'));
+            }
+        }
+    }
+
+    if (hex_view_->edit_mode() == HexView::EditMode::Overwrite && before.size() != after.size()) {
+        statusBar()->showMessage(QStringLiteral("Replacement must match the original length in overwrite mode."), 4000);
+        return false;
+    }
+
+    find_hex_mode = (find_mode == SearchInputMode::Hex || find_mode == SearchInputMode::Value);
+    execution = static_cast<SearchExecution>(action_combo->currentData().toInt());
+    selection_only = selection_only_check != nullptr && selection_only_check->isChecked();
+    last_search_input_mode_ = find_mode;
+    last_search_display_text_ = find_text;
+    return true;
 }
 
 void MainWindow::run_search(bool forward, bool from_caret, bool selection_only) {
@@ -1491,10 +1768,14 @@ void MainWindow::run_search(bool forward, bool from_caret, bool selection_only) 
         return;
     }
 
+    statusBar()->showMessage(QStringLiteral("Searching..."));
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
     qint64 found_offset = -1;
     const bool found = selection_only
         ? hex_view_->find_pattern_in_selection(last_search_pattern_, forward, from_caret, &found_offset)
         : hex_view_->find_pattern(last_search_pattern_, forward, from_caret, &found_offset);
+    QApplication::restoreOverrideCursor();
     if (!found) {
         show_search_summary(
             QStringLiteral("No matches found%1.")
@@ -1516,11 +1797,15 @@ void MainWindow::run_find_all(bool selection_only) {
     }
 
     if (last_search_pattern_.isEmpty()) {
-        find_all();
+        find();
         return;
     }
 
+    statusBar()->showMessage(QStringLiteral("Searching..."));
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
     const QVector<qint64> matches = hex_view_->find_all_patterns(last_search_pattern_, selection_only);
+    QApplication::restoreOverrideCursor();
     if (matches.isEmpty()) {
         show_search_summary(
             QStringLiteral("No matches found%1.")

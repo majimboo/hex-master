@@ -41,6 +41,7 @@ public:
     qint64 bytes_per_row() const;
     void set_bytes_per_row(qint64 bytes_per_row);
     void go_to_offset(qint64 offset);
+    void select_range(qint64 offset, qint64 length);
     EditMode edit_mode() const;
     void set_edit_mode(EditMode mode);
     void toggle_edit_mode();
