@@ -20,6 +20,7 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QCheckBox>
+#include <QColorDialog>
 #include <QGroupBox>
 #include <QFormLayout>
 #include <QComboBox>
@@ -27,14 +28,15 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QPalette>
+#include <QPainter>
 #include <QSettings>
 #include <QStatusBar>
+#include <QStyleOptionButton>
 #include <QTextEdit>
 #include <QTreeWidget>
 #include <QHeaderView>
 #include <QStyledItemDelegate>
 #include <QToolBar>
-#include <QToolButton>
 #include <QWidget>
 
 #include <limits>
@@ -80,9 +82,182 @@ public:
     }
 };
 
-QString color_css(const QColor& color) {
-    return color.name(QColor::HexRgb);
-}
+class EditModeSegmentedControl final : public QWidget {
+public:
+    explicit EditModeSegmentedControl(QWidget* parent = nullptr) : QWidget(parent) {
+        setFocusPolicy(Qt::StrongFocus);
+        setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        setFixedHeight(28);
+    }
+
+    void set_actions(QAction* insert_action, QAction* overwrite_action) {
+        insert_action_ = insert_action;
+        overwrite_action_ = overwrite_action;
+        if (insert_action_ != nullptr) {
+            QObject::connect(insert_action_, &QAction::changed, this, [this]() { update(); });
+            QObject::connect(insert_action_, &QAction::toggled, this, [this]() { update(); });
+        }
+        if (overwrite_action_ != nullptr) {
+            QObject::connect(overwrite_action_, &QAction::changed, this, [this]() { update(); });
+            QObject::connect(overwrite_action_, &QAction::toggled, this, [this]() { update(); });
+        }
+        updateGeometry();
+        update();
+    }
+
+    QSize sizeHint() const override {
+        const QFontMetrics fm(font());
+        const int segment_width = qMax(76, qMax(fm.horizontalAdvance(QStringLiteral("Insert")), fm.horizontalAdvance(QStringLiteral("Overwrite"))) + 24);
+        return QSize(segment_width * 2, 28);
+    }
+
+protected:
+    void paintEvent(QPaintEvent* event) override {
+        Q_UNUSED(event);
+        QPainter painter(this);
+        const QRect left_rect(0, 0, width() / 2 + 1, height());
+        const QRect right_rect(width() / 2, 0, width() - (width() / 2), height());
+
+        QStyleOptionButton left_button;
+        init_button_option(&left_button, left_rect, QStringLiteral("Insert"), checked_segment() == 0, hovered_segment_ == 0, pressed_segment_ == 0);
+        QStyleOptionButton right_button;
+        init_button_option(&right_button, right_rect, QStringLiteral("Overwrite"), checked_segment() == 1, hovered_segment_ == 1, pressed_segment_ == 1);
+
+        painter.save();
+        painter.setClipRect(left_rect.adjusted(0, 0, -1, 0));
+        style()->drawControl(QStyle::CE_PushButtonBevel, &left_button, &painter, this);
+        style()->drawControl(QStyle::CE_PushButtonLabel, &left_button, &painter, this);
+        painter.restore();
+
+        painter.save();
+        painter.setClipRect(right_rect.adjusted(1, 0, 0, 0));
+        style()->drawControl(QStyle::CE_PushButtonBevel, &right_button, &painter, this);
+        style()->drawControl(QStyle::CE_PushButtonLabel, &right_button, &painter, this);
+        painter.restore();
+
+        const QColor button_face = palette().color(QPalette::Button);
+        painter.setPen(QPen(button_face, 2));
+        painter.drawLine(width() / 2, 1, width() / 2, height() - 2);
+
+        painter.setPen(palette().color(QPalette::Midlight));
+        painter.drawLine(width() / 2, 2, width() / 2, height() - 3);
+
+        if (hasFocus()) {
+            QStyleOptionFocusRect focus_option;
+            focus_option.initFrom(this);
+            focus_option.rect = rect().adjusted(3, 3, -3, -3);
+            focus_option.backgroundColor = palette().color(QPalette::Button);
+            style()->drawPrimitive(QStyle::PE_FrameFocusRect, &focus_option, &painter, this);
+        }
+    }
+
+    void mousePressEvent(QMouseEvent* event) override {
+        if (event->button() != Qt::LeftButton) {
+            QWidget::mousePressEvent(event);
+            return;
+        }
+        pressed_segment_ = segment_at(event->pos());
+        if (pressed_segment_ >= 0) {
+            update();
+            event->accept();
+            return;
+        }
+        QWidget::mousePressEvent(event);
+    }
+
+    void mouseMoveEvent(QMouseEvent* event) override {
+        hovered_segment_ = segment_at(event->pos());
+        if (pressed_segment_ >= 0 && hovered_segment_ != pressed_segment_) {
+            update();
+        } else {
+            update();
+        }
+        QWidget::mouseMoveEvent(event);
+    }
+
+    void mouseReleaseEvent(QMouseEvent* event) override {
+        const int released_segment = segment_at(event->pos());
+        if (event->button() == Qt::LeftButton && pressed_segment_ >= 0 && released_segment == pressed_segment_) {
+            trigger_segment(released_segment);
+            event->accept();
+        }
+        pressed_segment_ = -1;
+        update();
+        QWidget::mouseReleaseEvent(event);
+    }
+
+    void leaveEvent(QEvent* event) override {
+        hovered_segment_ = -1;
+        update();
+        QWidget::leaveEvent(event);
+    }
+
+    void keyPressEvent(QKeyEvent* event) override {
+        if (event->key() == Qt::Key_Left) {
+            trigger_segment(0);
+            event->accept();
+            return;
+        }
+        if (event->key() == Qt::Key_Right) {
+            trigger_segment(1);
+            event->accept();
+            return;
+        }
+        if (event->key() == Qt::Key_Space || event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) {
+            trigger_segment(checked_segment() == 0 ? 1 : 0);
+            event->accept();
+            return;
+        }
+        QWidget::keyPressEvent(event);
+    }
+
+private:
+    void init_button_option(QStyleOptionButton* option, const QRect& rect, const QString& label, bool checked, bool hovered, bool pressed) const {
+        option->initFrom(this);
+        option->rect = rect;
+        option->text = label;
+        option->features = QStyleOptionButton::None;
+        option->state |= QStyle::State_Raised;
+        if (hovered) {
+            option->state |= QStyle::State_MouseOver;
+        }
+        if (checked) {
+            option->state |= QStyle::State_On | QStyle::State_Sunken;
+        }
+        if (pressed) {
+            option->state |= QStyle::State_Sunken;
+        }
+    }
+
+    int checked_segment() const {
+        if (insert_action_ != nullptr && insert_action_->isChecked()) {
+            return 0;
+        }
+        if (overwrite_action_ != nullptr && overwrite_action_->isChecked()) {
+            return 1;
+        }
+        return -1;
+    }
+
+    int segment_at(const QPoint& pos) const {
+        if (!rect().contains(pos)) {
+            return -1;
+        }
+        return pos.x() < width() / 2 ? 0 : 1;
+    }
+
+    void trigger_segment(int segment) {
+        QAction* action = segment == 0 ? insert_action_ : overwrite_action_;
+        if (action != nullptr && action->isEnabled()) {
+            action->trigger();
+        }
+    }
+
+    QAction* insert_action_ = nullptr;
+    QAction* overwrite_action_ = nullptr;
+    int hovered_segment_ = -1;
+    int pressed_segment_ = -1;
+};
 }
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
@@ -321,6 +496,44 @@ void MainWindow::add_recent_file(const QString& path) {
     update_recent_files_menu();
 }
 
+QString MainWindow::preferred_dialog_directory(const QString& fallback_file_name) const {
+    QSettings settings;
+    const QString last_directory = settings.value(QStringLiteral("session/lastDirectory")).toString();
+    if (!last_directory.isEmpty()) {
+        if (fallback_file_name.isEmpty()) {
+            return last_directory;
+        }
+        return QDir(last_directory).filePath(fallback_file_name);
+    }
+
+    if (hex_view_ != nullptr && hex_view_->has_document()) {
+        const QFileInfo current_info(hex_view_->document_path());
+        if (current_info.exists()) {
+            if (fallback_file_name.isEmpty()) {
+                return current_info.absolutePath();
+            }
+            return current_info.absoluteDir().filePath(fallback_file_name);
+        }
+    }
+
+    return fallback_file_name;
+}
+
+void MainWindow::remember_dialog_path(const QString& path) {
+    if (path.isEmpty()) {
+        return;
+    }
+
+    const QFileInfo info(path);
+    const QString directory = info.isDir() ? info.absoluteFilePath() : info.absolutePath();
+    if (directory.isEmpty()) {
+        return;
+    }
+
+    QSettings settings;
+    settings.setValue(QStringLiteral("session/lastDirectory"), directory);
+}
+
 void MainWindow::add_goto_offset_history(const QString& text) {
     const QString normalized = text.trimmed();
     if (normalized.isEmpty()) {
@@ -427,7 +640,7 @@ bool MainWindow::save_current_document(bool confirm_save, const QString* save_as
     const bool save_as = save_as_path != nullptr || hex_view_->is_read_only();
     QString target_path = save_as_path != nullptr ? *save_as_path : QString();
     if (save_as && target_path.isEmpty()) {
-        target_path = QFileDialog::getSaveFileName(this, QStringLiteral("Save File As"), hex_view_->document_path());
+        target_path = QFileDialog::getSaveFileName(this, QStringLiteral("Save File As"), preferred_dialog_directory(QFileInfo(hex_view_->document_path()).fileName()));
         if (target_path.isEmpty()) {
             return false;
         }
@@ -455,8 +668,10 @@ bool MainWindow::save_current_document(bool confirm_save, const QString* save_as
 
     if (save_as) {
         add_recent_file(target_path);
+        remember_dialog_path(target_path);
         statusBar()->showMessage(QStringLiteral("Saved %1").arg(QFileInfo(target_path).fileName()), 3000);
     } else {
+        remember_dialog_path(hex_view_->document_path());
         statusBar()->showMessage(QStringLiteral("Saved %1").arg(hex_view_->document_title()), 3000);
     }
 
@@ -503,6 +718,7 @@ bool MainWindow::open_file_path(const QString& path) {
     }
 
     add_recent_file(path);
+    remember_dialog_path(path);
     statusBar()->showMessage(QStringLiteral("Opened %1").arg(QFileInfo(path).fileName()), 3000);
     return true;
 }
@@ -575,82 +791,10 @@ void MainWindow::setup_toolbar() {
     toolbar_->addAction(undo_action_);
     toolbar_->addAction(redo_action_);
     toolbar_->addSeparator();
-    edit_mode_toggle_ = new QWidget(toolbar_);
-    auto* edit_mode_layout = new QHBoxLayout(edit_mode_toggle_);
-    edit_mode_layout->setContentsMargins(0, 0, 0, 0);
-    edit_mode_layout->setSpacing(0);
-    auto* insert_button = new QToolButton(edit_mode_toggle_);
-    insert_button->setDefaultAction(insert_mode_action_);
-    insert_button->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    auto* divider = new QWidget(edit_mode_toggle_);
-    auto* overwrite_button = new QToolButton(edit_mode_toggle_);
-    overwrite_button->setDefaultAction(overwrite_mode_action_);
-    overwrite_button->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    insert_button->setCheckable(true);
-    overwrite_button->setCheckable(true);
-    insert_button->setAutoExclusive(true);
-    overwrite_button->setAutoExclusive(true);
-    insert_button->setAutoRaise(false);
-    overwrite_button->setAutoRaise(false);
-    insert_button->setFixedHeight(24);
-    overwrite_button->setFixedHeight(24);
-    insert_button->setFont(toolbar_->font());
-    overwrite_button->setFont(toolbar_->font());
-    divider->setFixedWidth(1);
-    divider->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
-    edit_mode_toggle_->setFixedHeight(24);
-    edit_mode_layout->addWidget(insert_button);
-    edit_mode_layout->addWidget(divider);
-    edit_mode_layout->addWidget(overwrite_button);
-    const QPalette button_palette = insert_button->palette();
-    const QColor normal_bg = button_palette.color(QPalette::Button);
-    const QColor normal_text = button_palette.color(QPalette::ButtonText);
-    const QColor border_color = button_palette.color(QPalette::Mid);
-    const QColor hover_bg = normal_bg.lighter(104);
-    const QColor active_bg = normal_bg.darker(108);
-    const QColor active_text = normal_text;
-    divider->setStyleSheet(QStringLiteral("background: %1;").arg(color_css(border_color)));
-    edit_mode_toggle_->setStyleSheet(QStringLiteral(
-        "QWidget {"
-        " border: 1px solid %1;"
-        " border-radius: 5px;"
-        " background: %2;"
-        "}"
-        "QToolButton {"
-        " min-width: 82px;"
-        " min-height: 24px;"
-        " max-height: 24px;"
-        " padding: 0px 12px;"
-        " margin: 0px;"
-        " border: 0px;"
-        " border-radius: 0px;"
-        " background: transparent;"
-        "}"
-        "QToolButton:first-of-type {"
-        " border-top-left-radius: 4px;"
-        " border-bottom-left-radius: 4px;"
-        "}"
-        "QToolButton:last-of-type {"
-        " border-top-right-radius: 4px;"
-        " border-bottom-right-radius: 4px;"
-        "}"
-        "QToolButton:checked, QToolButton:pressed {"
-        " background: %4;"
-        " color: %5;"
-        " border-top-left-radius: 4px;"
-        " border-bottom-left-radius: 4px;"
-        " border-top-right-radius: 4px;"
-        " border-bottom-right-radius: 4px;"
-        "}"
-        "QToolButton:hover:!checked {"
-        " background: %6;"
-        "}"
-    )
-        .arg(color_css(border_color))
-        .arg(color_css(normal_bg))
-        .arg(color_css(active_bg))
-        .arg(color_css(active_text))
-        .arg(color_css(hover_bg)));
+    auto* edit_mode_control = new EditModeSegmentedControl(toolbar_);
+    edit_mode_control->setFont(toolbar_->font());
+    edit_mode_control->set_actions(insert_mode_action_, overwrite_mode_action_);
+    edit_mode_toggle_ = edit_mode_control;
     toolbar_->addWidget(edit_mode_toggle_);
     toolbar_->addSeparator();
     toolbar_->addAction(toggle_bookmark_action_);
@@ -720,11 +864,7 @@ void MainWindow::setup_central_widget() {
 
     connect(hex_view_, &HexView::status_changed, this, &MainWindow::update_status);
     connect(hex_view_, &HexView::document_loaded, this, &MainWindow::update_window_title);
-    connect(hex_view_, &HexView::bookmarks_changed, this, [this](const QString& text) {
-        if (bookmarks_text_ != nullptr) {
-            bookmarks_text_->setPlainText(text);
-        }
-    });
+    connect(hex_view_, &HexView::bookmarks_changed, this, &MainWindow::update_bookmarks_view);
     connect(hex_view_, &HexView::inspector_changed, this, [this](const QString& text) {
         update_inspector_view(text);
     });
@@ -762,13 +902,33 @@ void MainWindow::setup_docks() {
     update_inspector_view(QStringLiteral("Inspector\n\nOpen a file to inspect values."));
 
     bookmarks_dock_ = new QDockWidget("Bookmarks", this);
-    bookmarks_text_ = new QTextEdit("Bookmarks\n\nOpen a file to add bookmarks.", bookmarks_dock_);
-    bookmarks_text_->setReadOnly(true);
-    bookmarks_text_->setLineWrapMode(QTextEdit::NoWrap);
-    bookmarks_dock_->setWidget(bookmarks_text_);
+    bookmarks_tree_ = new QTreeWidget(bookmarks_dock_);
+    bookmarks_tree_->setRootIsDecorated(false);
+    bookmarks_tree_->setAlternatingRowColors(true);
+    bookmarks_tree_->setUniformRowHeights(true);
+    bookmarks_tree_->setColumnCount(4);
+    bookmarks_tree_->setHeaderLabels({QStringLiteral("Color"), QStringLiteral("Offset"), QStringLiteral("Row"), QStringLiteral("Label")});
+    bookmarks_tree_->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    bookmarks_tree_->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    bookmarks_tree_->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    bookmarks_tree_->header()->setStretchLastSection(true);
+    connect(bookmarks_tree_, &QTreeWidget::itemActivated, this, [this](QTreeWidgetItem*, int) { activate_bookmark_item(); });
+    connect(bookmarks_tree_, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem*, int) { activate_bookmark_item(); });
+    auto* rename_bookmark = new QAction(QStringLiteral("Rename Bookmark"), bookmarks_tree_);
+    auto* recolor_bookmark = new QAction(QStringLiteral("Change Color"), bookmarks_tree_);
+    auto* remove_bookmark = new QAction(QStringLiteral("Remove Bookmark"), bookmarks_tree_);
+    bookmarks_tree_->setContextMenuPolicy(Qt::ActionsContextMenu);
+    bookmarks_tree_->addAction(rename_bookmark);
+    bookmarks_tree_->addAction(recolor_bookmark);
+    bookmarks_tree_->addAction(remove_bookmark);
+    connect(rename_bookmark, &QAction::triggered, this, &MainWindow::rename_current_bookmark);
+    connect(recolor_bookmark, &QAction::triggered, this, &MainWindow::recolor_current_bookmark);
+    connect(remove_bookmark, &QAction::triggered, this, &MainWindow::remove_current_bookmark);
+    bookmarks_dock_->setWidget(bookmarks_tree_);
     bookmarks_dock_->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
     addDockWidget(Qt::LeftDockWidgetArea, bookmarks_dock_);
     bookmarks_dock_->hide();
+    update_bookmarks_view();
 
     search_results_dock_ = new QDockWidget("Search Results", this);
     search_results_tree_ = new QTreeWidget(search_results_dock_);
@@ -828,7 +988,7 @@ void MainWindow::new_file() {
         return;
     }
 
-    const QString path = QFileDialog::getSaveFileName(this, "New Buffer", QStringLiteral("untitled.bin"));
+    const QString path = QFileDialog::getSaveFileName(this, "New Buffer", preferred_dialog_directory(QStringLiteral("untitled.bin")));
     if (path.isEmpty()) {
         return;
     }
@@ -843,12 +1003,13 @@ void MainWindow::new_file() {
     if (hex_view_->open_file(path)) {
         update_window_title(hex_view_->document_title(), static_cast<qulonglong>(hex_view_->document_size()));
         add_recent_file(path);
+        remember_dialog_path(path);
         statusBar()->showMessage(QStringLiteral("Created %1").arg(QFileInfo(path).fileName()), 3000);
     }
 }
 
 void MainWindow::open_file() {
-    const QString path = QFileDialog::getOpenFileName(this, "Open File");
+    const QString path = QFileDialog::getOpenFileName(this, "Open File", preferred_dialog_directory());
     if (path.isEmpty()) {
         return;
     }
@@ -1915,6 +2076,42 @@ void MainWindow::update_inspector_view(const QString& text) {
     updating_inspector_tree_ = false;
 }
 
+void MainWindow::update_bookmarks_view() {
+    if (bookmarks_tree_ == nullptr) {
+        return;
+    }
+
+    bookmarks_tree_->clear();
+    if (hex_view_ == nullptr || !hex_view_->has_document()) {
+        auto* item = new QTreeWidgetItem(bookmarks_tree_, QStringList{QString(), QStringLiteral("Open a file to add bookmarks."), QString(), QString()});
+        item->setFirstColumnSpanned(false);
+        item->setFlags(item->flags() & ~Qt::ItemIsSelectable);
+        item->setData(0, Qt::UserRole, -1);
+        return;
+    }
+
+    const QVector<HexView::BookmarkRow> rows = hex_view_->bookmark_rows();
+    if (rows.isEmpty()) {
+        auto* item = new QTreeWidgetItem(bookmarks_tree_, QStringList{QString(), QStringLiteral("No bookmarks yet."), QString(), QStringLiteral("Use Ctrl+B at the caret.")});
+        item->setFlags(item->flags() & ~Qt::ItemIsSelectable);
+        item->setData(0, Qt::UserRole, -1);
+        return;
+    }
+
+    for (const HexView::BookmarkRow& row : rows) {
+        auto* item = new QTreeWidgetItem(bookmarks_tree_, QStringList{
+            QStringLiteral("  "),
+            QStringLiteral("0x%1").arg(row.offset, 8, 16, QChar(u'0')).toUpper(),
+            QString::number(row.row),
+            row.label
+        });
+        item->setData(0, Qt::UserRole, row.offset);
+        item->setBackground(0, QBrush(row.color));
+        item->setToolTip(0, row.color.name());
+        item->setToolTip(1, item->text(1));
+    }
+}
+
 void MainWindow::update_analysis_view(bool selection_only) {
     if (analysis_tree_ == nullptr) {
         return;
@@ -1967,6 +2164,83 @@ void MainWindow::handle_inspector_item_changed(QTreeWidgetItem* item, int column
     }
 
     statusBar()->showMessage(QStringLiteral("Updated %1.").arg(field), 2500);
+}
+
+void MainWindow::activate_bookmark_item() {
+    if (bookmarks_tree_ == nullptr || hex_view_ == nullptr) {
+        return;
+    }
+    QTreeWidgetItem* item = bookmarks_tree_->currentItem();
+    if (item == nullptr) {
+        return;
+    }
+    const qint64 offset = item->data(0, Qt::UserRole).toLongLong();
+    if (offset < 0) {
+        return;
+    }
+    hex_view_->go_to_offset(offset);
+    statusBar()->showMessage(QStringLiteral("Moved to bookmark at 0x%1").arg(offset, 0, 16), 2000);
+}
+
+void MainWindow::rename_current_bookmark() {
+    if (bookmarks_tree_ == nullptr || hex_view_ == nullptr) {
+        return;
+    }
+    QTreeWidgetItem* item = bookmarks_tree_->currentItem();
+    if (item == nullptr) {
+        return;
+    }
+    const qint64 offset = item->data(0, Qt::UserRole).toLongLong();
+    if (offset < 0) {
+        return;
+    }
+    bool ok = false;
+    const QString label = QInputDialog::getText(this, QStringLiteral("Rename Bookmark"), QStringLiteral("Label"), QLineEdit::Normal, item->text(3), &ok);
+    if (!ok) {
+        return;
+    }
+    if (hex_view_->set_bookmark_label(offset, label)) {
+        statusBar()->showMessage(QStringLiteral("Bookmark updated."), 2000);
+    }
+}
+
+void MainWindow::recolor_current_bookmark() {
+    if (bookmarks_tree_ == nullptr || hex_view_ == nullptr) {
+        return;
+    }
+    QTreeWidgetItem* item = bookmarks_tree_->currentItem();
+    if (item == nullptr) {
+        return;
+    }
+    const qint64 offset = item->data(0, Qt::UserRole).toLongLong();
+    if (offset < 0) {
+        return;
+    }
+    const QColor current = item->background(0).color();
+    const QColor chosen = QColorDialog::getColor(current, this, QStringLiteral("Choose Bookmark Color"));
+    if (!chosen.isValid()) {
+        return;
+    }
+    if (hex_view_->set_bookmark_color(offset, chosen)) {
+        statusBar()->showMessage(QStringLiteral("Bookmark color updated."), 2000);
+    }
+}
+
+void MainWindow::remove_current_bookmark() {
+    if (bookmarks_tree_ == nullptr || hex_view_ == nullptr) {
+        return;
+    }
+    QTreeWidgetItem* item = bookmarks_tree_->currentItem();
+    if (item == nullptr) {
+        return;
+    }
+    const qint64 offset = item->data(0, Qt::UserRole).toLongLong();
+    if (offset < 0) {
+        return;
+    }
+    if (hex_view_->remove_bookmark(offset)) {
+        statusBar()->showMessage(QStringLiteral("Bookmark removed."), 2000);
+    }
 }
 
 void MainWindow::copy_current_tree_value(QTreeWidget* tree) {

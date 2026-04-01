@@ -27,18 +27,27 @@ Examples:
 ## Creating a Release
 
 1. update the version in `apps/desktop/CMakeLists.txt`
-2. commit the version bump
-3. create a matching tag:
+2. update `CHANGELOG.md` with a short release summary for user-visible changes only
+3. commit the release prep
+4. create a matching tag:
 
 ```powershell
 git tag v1.0.1
 git push origin v1.0.1
 ```
 
-4. GitHub Actions will:
+5. GitHub Actions will:
    - build the Windows release artifact
    - package it as `HexMaster-windows-x64-v1.0.1.zip`
    - create or publish the GitHub Release
+
+## Changelog Policy
+
+Keep `CHANGELOG.md` lightweight.
+
+- update it only for release prep or an imminent release
+- summarize user-visible changes, not internal implementation churn
+- use commit history and GitHub Releases for day-to-day development detail
 
 ## GitHub Actions
 

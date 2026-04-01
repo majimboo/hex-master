@@ -3,6 +3,7 @@
 #include <QFontDatabase>
 #include <QDateTime>
 #include <QCryptographicHash>
+#include <QColor>
 #include <QEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -17,6 +18,18 @@
 namespace {
 constexpr int kScrollbarResolution = 1000000;
 constexpr qint64 kDirectScrollbarMax = std::numeric_limits<int>::max();
+
+QColor next_bookmark_color(int index) {
+    static const std::array<QColor, 6> colors = {
+        QColor(220, 68, 55),
+        QColor(244, 135, 30),
+        QColor(234, 179, 8),
+        QColor(34, 197, 94),
+        QColor(59, 130, 246),
+        QColor(168, 85, 247),
+    };
+    return colors[static_cast<std::size_t>(index % static_cast<int>(colors.size()))];
+}
 
 quint32 crc32_update(quint32 crc, const QByteArray& bytes) {
     static quint32 table[256];
@@ -844,7 +857,7 @@ void HexView::toggle_bookmark_at_caret() {
     if (bookmarks_.contains(caret_offset_)) {
         bookmarks_.remove(caret_offset_);
     } else {
-        bookmarks_.insert(caret_offset_);
+        bookmarks_.insert(caret_offset_, BookmarkEntry{next_bookmark_color(bookmarks_.size()), QString()});
     }
 
     emit_bookmarks();
@@ -856,8 +869,7 @@ void HexView::next_bookmark() {
         return;
     }
 
-    QList<qint64> sorted = bookmarks_.values();
-    std::sort(sorted.begin(), sorted.end());
+    const QList<qint64> sorted = bookmarks_.keys();
     for (const qint64 bookmark : sorted) {
         if (bookmark > caret_offset_) {
             move_caret(bookmark, false);
@@ -873,8 +885,7 @@ void HexView::previous_bookmark() {
         return;
     }
 
-    QList<qint64> sorted = bookmarks_.values();
-    std::sort(sorted.begin(), sorted.end());
+    const QList<qint64> sorted = bookmarks_.keys();
     for (auto it = sorted.crbegin(); it != sorted.crend(); ++it) {
         if (*it < caret_offset_) {
             move_caret(*it, false);
@@ -883,6 +894,50 @@ void HexView::previous_bookmark() {
     }
 
     move_caret(sorted.last(), false);
+}
+
+QVector<HexView::BookmarkRow> HexView::bookmark_rows() const {
+    QVector<BookmarkRow> rows;
+    rows.reserve(bookmarks_.size());
+    for (auto it = bookmarks_.cbegin(); it != bookmarks_.cend(); ++it) {
+        rows.push_back(BookmarkRow{
+            it.key(),
+            it.key() / bytes_per_row_,
+            it.value().color,
+            it.value().label,
+        });
+    }
+    return rows;
+}
+
+bool HexView::set_bookmark_label(qint64 offset, const QString& label) {
+    auto it = bookmarks_.find(offset);
+    if (it == bookmarks_.end()) {
+        return false;
+    }
+    it->label = label.trimmed();
+    emit_bookmarks();
+    return true;
+}
+
+bool HexView::set_bookmark_color(qint64 offset, const QColor& color) {
+    auto it = bookmarks_.find(offset);
+    if (it == bookmarks_.end() || !color.isValid()) {
+        return false;
+    }
+    it->color = color;
+    emit_bookmarks();
+    viewport()->update();
+    return true;
+}
+
+bool HexView::remove_bookmark(qint64 offset) {
+    if (bookmarks_.remove(offset) == 0) {
+        return false;
+    }
+    emit_bookmarks();
+    viewport()->update();
+    return true;
 }
 
 void HexView::set_bytes_per_row(qint64 bytes_per_row) {
@@ -1037,8 +1092,18 @@ void HexView::paintEvent(QPaintEvent* event) {
         painter.setPen(secondary_text);
         const bool row_bookmarked = has_bookmark(cached_row.row_offset);
         if (metrics_.marker_width > 0) {
-            painter.drawText(QRect(metrics_.marker_start, y, metrics_.marker_width, metrics_.line_height),
-                Qt::AlignCenter, row_bookmarked ? QStringLiteral("*") : (current_row ? QStringLiteral(">") : QString()));
+            const QRect marker_rect(metrics_.marker_start, y, metrics_.marker_width, metrics_.line_height);
+            if (row_bookmarked) {
+                const BookmarkEntry* entry = bookmark_entry_for_row(cached_row.row_offset);
+                const QColor marker_color = entry != nullptr ? entry->color : QColor(220, 68, 55);
+                painter.setRenderHint(QPainter::Antialiasing, true);
+                painter.setBrush(marker_color);
+                painter.setPen(Qt::NoPen);
+                painter.drawEllipse(marker_rect.center(), 4, 4);
+                painter.setRenderHint(QPainter::Antialiasing, false);
+            } else if (current_row) {
+                painter.drawText(marker_rect, Qt::AlignCenter, QStringLiteral(">"));
+            }
         }
         if (metrics_.row_number_width > 0) {
             painter.drawText(QRect(metrics_.row_number_start, y, metrics_.row_number_width, metrics_.line_height),
@@ -1398,7 +1463,7 @@ void HexView::emit_status() {
 }
 
 void HexView::emit_bookmarks() {
-    emit bookmarks_changed(format_bookmarks_text());
+    emit bookmarks_changed();
 }
 
 void HexView::emit_inspector() {
@@ -1801,26 +1866,14 @@ bool HexView::has_bookmark(qint64 offset) const {
     return false;
 }
 
-QString HexView::format_bookmarks_text() const {
-    if (!has_document()) {
-        return QStringLiteral("Bookmarks\n\nOpen a file to add bookmarks.");
+const HexView::BookmarkEntry* HexView::bookmark_entry_for_row(qint64 row_start) const {
+    for (qint64 index = 0; index < bytes_per_row_; ++index) {
+        auto it = bookmarks_.constFind(row_start + index);
+        if (it != bookmarks_.cend()) {
+            return &it.value();
+        }
     }
-
-    if (bookmarks_.isEmpty()) {
-        return QStringLiteral("Bookmarks\n\nNo bookmarks yet.\nUse Ctrl+B to toggle a bookmark at the caret.");
-    }
-
-    QList<qint64> sorted = bookmarks_.values();
-    std::sort(sorted.begin(), sorted.end());
-
-    QString text = QStringLiteral("Bookmarks\n\n");
-    for (const qint64 bookmark : sorted) {
-        const qint64 row = bookmark / bytes_per_row_;
-        text += QStringLiteral("0x%1   Row %2\n")
-                    .arg(bookmark, 8, 16, QChar(u'0'))
-                    .arg(row);
-    }
-    return text.toUpper();
+    return nullptr;
 }
 
 QVector<HexView::InspectorRow> HexView::build_inspector_rows() const {

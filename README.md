@@ -75,10 +75,6 @@ Rust-only build:
 .\scripts\build.ps1 -SkipQt
 ```
 
-More build details:
-
-- [docs/project/BUILD.md](docs/project/BUILD.md)
-
 ## Versioning
 
 Hex Master follows semantic versioning.
@@ -86,16 +82,6 @@ Hex Master follows semantic versioning.
 - `MAJOR`: breaking changes
 - `MINOR`: backward-compatible features
 - `PATCH`: backward-compatible fixes and polish
-
-Version is defined in one place:
-
-- [apps/desktop/CMakeLists.txt](apps/desktop/CMakeLists.txt)
-
-That version feeds:
-
-- application metadata
-- the About dialog
-- Windows executable version information
 
 ## Release Process
 
@@ -105,26 +91,6 @@ Recommended release flow:
 2. commit the version change
 3. create and push a matching tag such as `v1.0.1`
 4. GitHub Actions builds and publishes the release archive
-
-Release automation:
-
-- [.github/workflows/release.yml](.github/workflows/release.yml)
-- [docs/project/RELEASE.md](docs/project/RELEASE.md)
-
-## Repository Layout
-
-- `apps/desktop`: main Qt desktop application
-- `apps/bootstrap`: Rust-side bootstrap crate
-- `crates/hexapp-core`: core document and selection logic
-- `crates/hexapp-io`: file-backed I/O support
-- `crates/hexapp-search`: search-related logic
-- `crates/hexapp-analysis`: hashes and analysis helpers
-- `crates/hexapp-inspector`: typed data interpretation
-- `crates/hexapp-session`: settings and session persistence
-- `crates/hexapp-ffi`: Rust bridge consumed by the desktop shell
-- `docs/`: GitHub Pages site and public-facing project docs
-- `docs/project/`: engineering, roadmap, build, and release documents
-- `scripts/`: local bootstrap and build scripts
 
 ## Automation
 
@@ -139,16 +105,6 @@ Workflow files:
 - [.github/workflows/ci.yml](.github/workflows/ci.yml)
 - [.github/workflows/release.yml](.github/workflows/release.yml)
 - [.github/workflows/pages.yml](.github/workflows/pages.yml)
-
-## Documentation
-
-- [CHANGELOG.md](CHANGELOG.md)
-- [docs/project/PRODUCT_SPEC.md](docs/project/PRODUCT_SPEC.md)
-- [docs/project/ARCHITECTURE.md](docs/project/ARCHITECTURE.md)
-- [docs/project/ROADMAP.md](docs/project/ROADMAP.md)
-- [docs/project/MVP_CHECKLIST.md](docs/project/MVP_CHECKLIST.md)
-- [docs/project/BUILD.md](docs/project/BUILD.md)
-- [docs/project/RELEASE.md](docs/project/RELEASE.md)
 
 ## License
 

@@ -1,7 +1,8 @@
 #pragma once
 
 #include <QAbstractScrollArea>
-#include <QSet>
+#include <QColor>
+#include <QMap>
 #include <QVector>
 
 #include "file_byte_source.hpp"
@@ -35,6 +36,13 @@ public:
         QString section;
         QString field;
         QString value;
+    };
+
+    struct BookmarkRow {
+        qint64 offset = 0;
+        qint64 row = 0;
+        QColor color;
+        QString label;
     };
 
     explicit HexView(QWidget* parent = nullptr);
@@ -84,6 +92,10 @@ public:
     void toggle_bookmark_at_caret();
     void next_bookmark();
     void previous_bookmark();
+    QVector<BookmarkRow> bookmark_rows() const;
+    bool set_bookmark_label(qint64 offset, const QString& label);
+    bool set_bookmark_color(qint64 offset, const QColor& color);
+    bool remove_bookmark(qint64 offset);
     bool find_pattern(const QByteArray& pattern, bool forward, bool from_caret, qint64* found_offset = nullptr);
     bool find_pattern_in_selection(const QByteArray& pattern, bool forward, bool from_caret, qint64* found_offset = nullptr);
     QVector<qint64> find_all_patterns(const QByteArray& pattern, bool selection_only = false) const;
@@ -100,7 +112,7 @@ public:
 signals:
     void status_changed(qulonglong caret_offset, qulonglong selection_size, qulonglong document_size);
     void document_loaded(const QString& title, qulonglong document_size);
-    void bookmarks_changed(const QString& text);
+    void bookmarks_changed();
     void inspector_changed(const QString& text);
 
 protected:
@@ -136,6 +148,11 @@ private:
         QString row_number_text;
         QString offset_text;
         QString ascii_text;
+    };
+
+    struct BookmarkEntry {
+        QColor color;
+        QString label;
     };
 
     enum class HeaderDivider {
@@ -184,7 +201,7 @@ private:
     QString formatted_offset(qint64 offset) const;
     QChar printable_char(quint8 value) const;
     bool has_bookmark(qint64 offset) const;
-    QString format_bookmarks_text() const;
+    const BookmarkEntry* bookmark_entry_for_row(qint64 row_start) const;
     QVector<InspectorRow> build_inspector_rows() const;
     QString format_inspector_text() const;
     QVector<AnalysisRow> build_analysis_rows(bool selection_only) const;
@@ -206,7 +223,7 @@ private:
     qint64 render_generation_ = 0;
     QVector<CachedRow> cached_rows_;
     qint64 hovered_offset_ = -1;
-    QSet<qint64> bookmarks_;
+    QMap<qint64, BookmarkEntry> bookmarks_;
     EditMode edit_mode_ = EditMode::Overwrite;
     ActivePane active_pane_ = ActivePane::Hex;
     qint8 pending_insert_high_nibble_ = -1;
