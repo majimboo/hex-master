@@ -4,9 +4,9 @@
 
 Hex Master has moved past the scaffold stage. The repository now contains a functional Windows desktop application with versioning, CI, release automation, and a public Pages site.
 
-The roadmap below focuses on the work still worth doing after the current 1.0 baseline.
+The roadmap below is the current source of truth for remaining product and release work.
 
-## 1.0 Baseline
+## Current Baseline
 
 Already in place:
 
@@ -19,8 +19,22 @@ Already in place:
 - configurable viewport layout with persisted view state
 - recent files, settings, session restore, and About dialog
 - unified versioning and GitHub release infrastructure
+- schema editor with structure parsing and coverage reporting
+- side-by-side compare tool with results, progress, and diff navigation
 
-## Next Milestone: Responsiveness
+## Near-Term Priorities
+
+Highest-value remaining work:
+
+- move hash and remaining analysis work off the UI thread
+- improve progress and cancel consistency for the remaining heavy operations
+- improve large-file structural editing scalability
+- add installer packaging for Windows releases
+- add code signing for public Windows builds
+- add crash recovery and autosave
+- broaden release QA for large-file, replace, save, and compare scenarios
+
+## Next Milestone: Responsiveness and Long Operations
 
 Priority work:
 
@@ -74,7 +88,7 @@ Exit criteria:
 - recovery expectations are documented and implemented
 - release confidence is based on broader automated and manual coverage
 
-## Longer-Term Exploration
+## Longer-Term Product Work
 
 Possible future features after the 1.x stability work:
 
