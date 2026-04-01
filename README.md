@@ -1,8 +1,8 @@
-# Hex Master
-
 <p align="center">
   <img src="appicon.png" alt="Hex Master logo" width="160">
 </p>
+
+# Hex Master
 
 Hex Master is a Windows-first hex editor and binary file editor built with a Rust core and a Qt desktop shell.
 
