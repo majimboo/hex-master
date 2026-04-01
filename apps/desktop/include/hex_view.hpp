@@ -53,6 +53,7 @@ public:
     bool redo();
     bool has_selection() const;
     QByteArray selected_bytes() const;
+    QByteArray read_bytes(qint64 offset, qint64 length) const;
     QString selected_hex_text() const;
     bool insert_at_caret(const QByteArray& bytes);
     bool delete_selection();

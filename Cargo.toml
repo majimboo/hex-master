@@ -7,7 +7,7 @@ members = [
     "crates/hexapp-io",
     "crates/hexapp-search",
     "crates/hexapp-session",
-    "ui/qt",
+    "apps/bootstrap",
 ]
 resolver = "2"
 

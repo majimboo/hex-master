@@ -37,7 +37,7 @@ jobs:
 
       - name: Configure Qt shell
         shell: pwsh
-        run: cmake -S ui/qt-shell -B build/qt-shell-complete -G "Visual Studio 17 2022" -A x64
+        run: cmake -S apps/desktop -B build/qt-shell-complete -G "Visual Studio 17 2022" -A x64
 
       - name: Build Qt shell release
         shell: pwsh

@@ -424,10 +424,11 @@ void MainWindow::setup_docks() {
     search_results_tree_->setRootIsDecorated(false);
     search_results_tree_->setAlternatingRowColors(true);
     search_results_tree_->setUniformRowHeights(true);
-    search_results_tree_->setColumnCount(2);
-    search_results_tree_->setHeaderLabels({QStringLiteral("Offset"), QStringLiteral("Details")});
+    search_results_tree_->setColumnCount(3);
+    search_results_tree_->setHeaderLabels({QStringLiteral("Offset"), QStringLiteral("Match"), QStringLiteral("Preview")});
     search_results_tree_->header()->setStretchLastSection(true);
     search_results_tree_->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    search_results_tree_->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     connect(search_results_tree_, &QTreeWidget::itemActivated, this, [this](QTreeWidgetItem*, int) { activate_search_result_item(); });
     connect(search_results_tree_, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem*, int) { activate_search_result_item(); });
     search_results_dock_->setWidget(search_results_tree_);
@@ -711,8 +712,14 @@ void MainWindow::compute_hashes() {
             QMessageBox::Yes | QMessageBox::No,
             QMessageBox::Yes) == QMessageBox::Yes;
 
+    statusBar()->showMessage(QStringLiteral("Computing hashes..."));
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+    const QString report = hex_view_->build_hash_report(selection_only);
+    QApplication::restoreOverrideCursor();
+
     if (analysis_text_ != nullptr) {
-        analysis_text_->setPlainText(hex_view_->build_hash_report(selection_only));
+        analysis_text_->setPlainText(report);
     }
     if (analysis_dock_ != nullptr) {
         analysis_dock_->raise();
@@ -1416,7 +1423,7 @@ void MainWindow::show_search_summary(const QString& summary) {
     }
 
     search_results_tree_->clear();
-    auto* item = new QTreeWidgetItem(search_results_tree_, QStringList{QStringLiteral("Summary"), summary});
+    auto* item = new QTreeWidgetItem(search_results_tree_, QStringList{QStringLiteral("Summary"), summary, QString()});
     item->setFirstColumnSpanned(false);
 }
 
@@ -1426,21 +1433,34 @@ void MainWindow::show_search_matches(const QString& summary, const QVector<qint6
     }
 
     search_results_tree_->clear();
-    auto* summary_item = new QTreeWidgetItem(search_results_tree_, QStringList{QStringLiteral("Summary"), summary});
+    auto* summary_item = new QTreeWidgetItem(search_results_tree_, QStringList{QStringLiteral("Summary"), summary, QString()});
     summary_item->setFirstColumnSpanned(false);
 
-    auto* results_root = new QTreeWidgetItem(search_results_tree_, QStringList{QStringLiteral("Results"), QStringLiteral("%1 match(es)").arg(matches.size())});
+    auto* results_root = new QTreeWidgetItem(
+        search_results_tree_,
+        QStringList{QStringLiteral("Results"), QStringLiteral("%1 match(es)").arg(matches.size()), QString()});
     results_root->setExpanded(true);
 
     const int max_results = 512;
     const int shown = qMin(matches.size(), max_results);
     for (int index = 0; index < shown; ++index) {
         const qint64 offset = matches.at(index);
+        const QByteArray preview_bytes = hex_view_ != nullptr ? hex_view_->read_bytes(offset, qMax(16, last_search_pattern_.size())) : QByteArray();
+        QString preview;
+        for (int byte_index = 0; byte_index < preview_bytes.size(); ++byte_index) {
+            if (byte_index > 0) {
+                preview += QLatin1Char(' ');
+            }
+            preview += QStringLiteral("%1")
+                           .arg(static_cast<quint8>(preview_bytes.at(byte_index)), 2, 16, QChar(u'0'))
+                           .toUpper();
+        }
         auto* item = new QTreeWidgetItem(
             results_root,
             QStringList{
                 QStringLiteral("0x%1").arg(offset, 8, 16, QChar(u'0')).toUpper(),
-                QStringLiteral("Match %1").arg(index + 1)});
+                QStringLiteral("Match %1").arg(index + 1),
+                preview});
         item->setData(0, Qt::UserRole, offset);
         item->setData(1, Qt::UserRole, last_search_pattern_.size());
     }
@@ -1450,7 +1470,8 @@ void MainWindow::show_search_matches(const QString& summary, const QVector<qint6
             results_root,
             QStringList{
                 QStringLiteral("More"),
-                QStringLiteral("Showing first %1 matches").arg(max_results)});
+                QStringLiteral("Showing first %1 matches").arg(max_results),
+                QString()});
     }
 
     search_results_tree_->expandAll();

@@ -63,7 +63,7 @@ function Resolve-QtPrefix {
 }
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$qtShellSource = Join-Path $repoRoot "ui\\qt-shell"
+$qtShellSource = Join-Path $repoRoot "apps\\desktop"
 $qtBuildDir = Join-Path $repoRoot "build\\qt-shell-complete"
 
 Require-Command "cargo" | Out-Null

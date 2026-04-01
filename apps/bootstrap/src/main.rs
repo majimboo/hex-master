@@ -6,5 +6,5 @@ fn main() {
 
     println!("Hex Master bootstrap");
     println!("Initial document: {} ({} bytes)", document.title, document.len);
-    println!("Qt shell source: ui/qt-shell");
+    println!("Qt shell source: apps/desktop");
 }

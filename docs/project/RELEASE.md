@@ -4,7 +4,7 @@
 
 Version is defined in:
 
-- `ui/qt-shell/CMakeLists.txt`
+- `apps/desktop/CMakeLists.txt`
 
 That value feeds:
 
@@ -26,7 +26,7 @@ Examples:
 
 ## Creating a Release
 
-1. update the version in `ui/qt-shell/CMakeLists.txt`
+1. update the version in `apps/desktop/CMakeLists.txt`
 2. commit the version bump
 3. create a matching tag:
 

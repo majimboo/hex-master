@@ -1,6 +1,10 @@
 # Hex Master
 
-Hex Master is a Windows-first hex editor built with a Rust core and a Qt desktop shell.
+Hex Master is a Windows-first hex editor and binary file editor built with a Rust core and a Qt desktop shell.
+
+It is intended as a modern desktop alternative to Hex Workshop for users who want a native hex editor for inspecting and editing binary data, executable files, save files, firmware images, and other raw byte-oriented formats.
+
+![Hex Master main window](docs/assets/screenshots/hexmaster-main-window.png)
 
 The current app is focused on practical desktop workflows:
 
@@ -10,6 +14,15 @@ The current app is focused on practical desktop workflows:
 - byte-pattern, text, and typed-value search
 - replace next and replace all from a unified replace workflow
 - bookmarks, checksums, recent files, and session restore
+
+Search-friendly keywords for this project:
+
+- hex editor
+- binary editor
+- hex workshop alternative
+- Windows hex editor
+- Rust hex editor
+- Qt hex editor
 
 ## Status
 
@@ -67,7 +80,7 @@ Rust-only build:
 
 Version is defined in one place:
 
-- [ui/qt-shell/CMakeLists.txt](ui/qt-shell/CMakeLists.txt)
+- [apps/desktop/CMakeLists.txt](apps/desktop/CMakeLists.txt)
 
 That version feeds:
 
@@ -92,7 +105,7 @@ Example progression:
 
 Recommended release process:
 
-1. bump the version in `ui/qt-shell/CMakeLists.txt`
+1. bump the version in `apps/desktop/CMakeLists.txt`
 2. commit the version change
 3. create and push a matching tag like `v1.0.1`
 4. GitHub Actions builds and publishes the release archive
@@ -144,9 +157,10 @@ Pages content is deployed from the `docs/` directory using GitHub Actions.
 - `crates/hexapp-inspector`: typed data interpretation
 - `crates/hexapp-session`: settings and session persistence
 - `crates/hexapp-ffi`: Rust bridge consumed by the Qt shell
-- `ui/qt-shell`: main Qt desktop application
-- `ui/qt`: Rust-side bootstrap crate
-- `docs/`: product, architecture, roadmap, and Pages site
+- `apps/desktop`: main Qt desktop application
+- `apps/bootstrap`: Rust-side bootstrap crate
+- `docs/`: GitHub Pages site and public-facing project docs
+- `docs/project/`: engineering, roadmap, build, and release documents
 - `scripts/`: local bootstrap and build scripts
 
 ## Public Repo Checklist
@@ -163,12 +177,12 @@ For a professional public repository, the expected baseline is:
 
 ## Documentation
 
-- [docs/PRODUCT_SPEC.md](docs/PRODUCT_SPEC.md)
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
-- [docs/ROADMAP.md](docs/ROADMAP.md)
-- [docs/MVP_CHECKLIST.md](docs/MVP_CHECKLIST.md)
-- [docs/BUILD.md](docs/BUILD.md)
-- [docs/RELEASE.md](docs/RELEASE.md)
+- [docs/project/PRODUCT_SPEC.md](docs/project/PRODUCT_SPEC.md)
+- [docs/project/ARCHITECTURE.md](docs/project/ARCHITECTURE.md)
+- [docs/project/ROADMAP.md](docs/project/ROADMAP.md)
+- [docs/project/MVP_CHECKLIST.md](docs/project/MVP_CHECKLIST.md)
+- [docs/project/BUILD.md](docs/project/BUILD.md)
+- [docs/project/RELEASE.md](docs/project/RELEASE.md)
 
 ## License
 

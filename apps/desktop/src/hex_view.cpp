@@ -162,6 +162,14 @@ QByteArray HexView::selected_bytes() const {
     return source_.read_range(selection_start(), selection_size());
 }
 
+QByteArray HexView::read_bytes(qint64 offset, qint64 length) const {
+    if (!has_document() || length <= 0) {
+        return {};
+    }
+
+    return source_.read_range(offset, length);
+}
+
 QString HexView::selected_hex_text() const {
     const QByteArray bytes = selected_bytes();
     return bytes.isEmpty() ? QString() : QString::fromLatin1(bytes.toHex(' ').toUpper());
