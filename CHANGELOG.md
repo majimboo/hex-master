@@ -6,12 +6,7 @@ The format is based on Keep a Changelog, and this project follows Semantic Versi
 
 ## [Unreleased]
 
-### Changed
-
-- Repository reorganized into `apps/desktop`, `apps/bootstrap`, and `docs/project`
-- Public repository metadata, GitHub Actions workflows, and GitHub Pages site added
-- Search results improved with full-range selection and byte previews
-- Busy-state feedback added for search and hash operations
+- No released changes yet.
 
 ## [1.0.0] - 2026-04-01
 

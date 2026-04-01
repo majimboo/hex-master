@@ -40,11 +40,13 @@ The current release line is centered on a functional Windows desktop editor with
 - undo and redo
 - go-to-offset and bookmark navigation
 - recent files, persistent settings, and session restore
-- inspector views for integer, floating-point, and time interpretations
-- checksum and hash tools
+- inspector views for integer, floating-point, time, and IPv4 interpretations
+- inline inspector editing for writable value types
+- grouped checksum and hash tools with copyable values
 - search by text, hex bytes, and typed values
 - replace next and replace all
 - search results table with result navigation
+- configurable viewport layout with persisted gutters, offsets, row numbers, and bytes-per-row
 
 ## Public Positioning
 
@@ -80,6 +82,7 @@ The public 1.x line should meet these baseline expectations:
 - no silent data loss in normal save/open/close flows
 - clear dirty-state prompts
 - stable executable naming and version metadata
+- persistent view/layout customization that resets cleanly to defaults
 - searchable and buildable public repository
 - tagged release artifacts published through GitHub
 

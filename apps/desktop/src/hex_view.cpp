@@ -16,6 +16,7 @@
 
 namespace {
 constexpr int kScrollbarResolution = 1000000;
+constexpr qint64 kDirectScrollbarMax = std::numeric_limits<int>::max();
 
 quint32 crc32_update(quint32 crc, const QByteArray& bytes) {
     static quint32 table[256];
@@ -49,7 +50,7 @@ HexView::HexView(QWidget* parent) : QAbstractScrollArea(parent) {
     setFocusPolicy(Qt::StrongFocus);
 
     connect(verticalScrollBar(), &QScrollBar::valueChanged, this, [this](int value) {
-        first_visible_row_ = slider_to_row(value);
+        first_visible_row_ = qBound<qint64>(0, slider_to_row(value), max_first_visible_row());
         viewport()->update();
     });
 
@@ -70,6 +71,7 @@ bool HexView::open_file(const QString& path) {
     active_pane_ = ActivePane::Hex;
     bookmarks_.clear();
     ++render_generation_;
+    refresh_metrics();
     invalidate_row_cache();
     refresh_scrollbar();
     viewport()->update();
@@ -82,6 +84,76 @@ bool HexView::open_file(const QString& path) {
 
 bool HexView::has_document() const {
     return source_.is_open();
+}
+
+HexView::ActivePane HexView::active_pane() const {
+    return active_pane_;
+}
+
+bool HexView::bookmark_gutter_visible() const {
+    return show_bookmark_gutter_;
+}
+
+void HexView::set_bookmark_gutter_visible(bool visible) {
+    if (show_bookmark_gutter_ == visible) {
+        return;
+    }
+    show_bookmark_gutter_ = visible;
+    refresh_metrics();
+    viewport()->update();
+}
+
+bool HexView::row_numbers_visible() const {
+    return show_row_numbers_;
+}
+
+void HexView::set_row_numbers_visible(bool visible) {
+    if (show_row_numbers_ == visible) {
+        return;
+    }
+    show_row_numbers_ = visible;
+    refresh_metrics();
+    viewport()->update();
+}
+
+bool HexView::offsets_visible() const {
+    return show_offsets_;
+}
+
+void HexView::set_offsets_visible(bool visible) {
+    if (show_offsets_ == visible) {
+        return;
+    }
+    show_offsets_ = visible;
+    refresh_metrics();
+    viewport()->update();
+}
+
+int HexView::row_number_column_width() const {
+    return custom_row_number_width_;
+}
+
+void HexView::set_row_number_column_width(int width) {
+    custom_row_number_width_ = width > 0 ? width : -1;
+    refresh_metrics();
+    viewport()->update();
+}
+
+int HexView::offset_column_width() const {
+    return custom_address_width_;
+}
+
+void HexView::set_offset_column_width(int width) {
+    custom_address_width_ = width > 0 ? width : -1;
+    refresh_metrics();
+    viewport()->update();
+}
+
+void HexView::reset_view_layout() {
+    custom_row_number_width_ = -1;
+    custom_address_width_ = -1;
+    refresh_metrics();
+    viewport()->update();
 }
 
 QString HexView::document_title() const {
@@ -172,7 +244,21 @@ QByteArray HexView::read_bytes(qint64 offset, qint64 length) const {
 
 QString HexView::selected_hex_text() const {
     const QByteArray bytes = selected_bytes();
-    return bytes.isEmpty() ? QString() : QString::fromLatin1(bytes.toHex(' ').toUpper());
+    return bytes.isEmpty() ? QString() : QString::fromLatin1(bytes.toHex().toUpper());
+}
+
+QString HexView::selected_text_text() const {
+    const QByteArray bytes = selected_bytes();
+    if (bytes.isEmpty()) {
+        return QString();
+    }
+
+    QString text;
+    text.reserve(bytes.size());
+    for (const char byte : bytes) {
+        text.append(printable_char(static_cast<quint8>(byte)));
+    }
+    return text;
 }
 
 bool HexView::insert_at_caret(const QByteArray& bytes) {
@@ -434,14 +520,41 @@ QString HexView::format_search_result(qint64 found_offset, const QByteArray& pat
 }
 
 QString HexView::build_hash_report(bool selection_only) const {
+    QString text = QStringLiteral("Analysis\n\n");
+    QString current_section;
+    const QVector<AnalysisRow> rows = build_analysis_rows(selection_only);
+    for (const AnalysisRow& row : rows) {
+        if (row.section != current_section) {
+            if (!current_section.isEmpty()) {
+                text += QLatin1Char('\n');
+            }
+            current_section = row.section;
+        }
+        text += QStringLiteral("%1: %2\n").arg(row.field, row.value);
+    }
+    return text;
+}
+
+QVector<HexView::AnalysisRow> HexView::analysis_rows(bool selection_only) const {
+    return build_analysis_rows(selection_only);
+}
+
+QVector<HexView::AnalysisRow> HexView::build_analysis_rows(bool selection_only) const {
+    QVector<AnalysisRow> rows;
+    auto add_row = [&rows](const QString& section, const QString& field, const QString& value) {
+        rows.push_back(AnalysisRow{section, field, value});
+    };
+
     if (!has_document()) {
-        return QStringLiteral("Analysis\n\nOpen a file to compute hashes.");
+        add_row(QStringLiteral("Overview"), QStringLiteral("Status"), QStringLiteral("Open a file to compute hashes."));
+        return rows;
     }
 
     const qint64 range_start = selection_only && has_selection() ? selection_start() : 0;
     const qint64 range_len = selection_only && has_selection() ? selection_size() : document_size();
     if (range_len <= 0) {
-        return QStringLiteral("Analysis\n\nNo bytes available for hashing.");
+        add_row(QStringLiteral("Overview"), QStringLiteral("Status"), QStringLiteral("No bytes available for hashing."));
+        return rows;
     }
 
     constexpr qint64 kChunkSize = 1024 * 1024;
@@ -464,19 +577,20 @@ QString HexView::build_hash_report(bool selection_only) const {
         offset += chunk.size();
     }
 
-    QString text = QStringLiteral("Analysis\n\n");
-    text += QStringLiteral("Range: 0x%1 - 0x%2\n")
-                .arg(range_start, 8, 16, QChar(u'0'))
-                .arg(range_start + range_len - 1, 8, 16, QChar(u'0'))
-                .toUpper();
-    text += QStringLiteral("Length: %1 bytes\n").arg(range_len);
-    text += QStringLiteral("CRC32:  %1\n").arg(QStringLiteral("%1").arg(~crc, 8, 16, QChar(u'0')).toUpper());
-    text += QStringLiteral("MD5:    %1\n").arg(QString::fromLatin1(md5.result().toHex()).toUpper());
-    text += QStringLiteral("SHA-1:  %1\n").arg(QString::fromLatin1(sha1.result().toHex()).toUpper());
-    text += QStringLiteral("SHA-256:%1%2")
-                .arg(QChar(u' '))
-                .arg(QString::fromLatin1(sha256.result().toHex()).toUpper());
-    return text;
+    add_row(QStringLiteral("Overview"), QStringLiteral("Scope"), selection_only && has_selection() ? QStringLiteral("Selection") : QStringLiteral("Whole Document"));
+    add_row(
+        QStringLiteral("Overview"),
+        QStringLiteral("Range"),
+        QStringLiteral("0x%1 - 0x%2")
+            .arg(range_start, 8, 16, QChar(u'0'))
+            .arg(range_start + range_len - 1, 8, 16, QChar(u'0'))
+            .toUpper());
+    add_row(QStringLiteral("Overview"), QStringLiteral("Length"), QStringLiteral("%1 bytes").arg(range_len));
+    add_row(QStringLiteral("Checksums"), QStringLiteral("CRC32"), QStringLiteral("%1").arg(~crc, 8, 16, QChar(u'0')).toUpper());
+    add_row(QStringLiteral("Digests"), QStringLiteral("MD5"), QString::fromLatin1(md5.result().toHex()).toUpper());
+    add_row(QStringLiteral("Digests"), QStringLiteral("SHA-1"), QString::fromLatin1(sha1.result().toHex()).toUpper());
+    add_row(QStringLiteral("Digests"), QStringLiteral("SHA-256"), QString::fromLatin1(sha256.result().toHex()).toUpper());
+    return rows;
 }
 
 bool HexView::replace_range(qint64 offset, const QByteArray& before, const QByteArray& after) {
@@ -576,6 +690,150 @@ void HexView::set_inspector_endian(InspectorEndian endian) {
 
 QVector<HexView::InspectorRow> HexView::inspector_rows() const {
     return build_inspector_rows();
+}
+
+bool HexView::apply_inspector_edit(const QString& section, const QString& field, const QString& value, QString* error_message) {
+    auto fail = [&](const QString& message) {
+        if (error_message != nullptr) {
+            *error_message = message;
+        }
+        return false;
+    };
+
+    if (!has_document()) {
+        return fail(QStringLiteral("Open a file before editing inspector values."));
+    }
+    if (is_read_only()) {
+        return fail(QStringLiteral("Document is read-only."));
+    }
+
+    const bool use_selection = has_selection();
+    const qint64 start_offset = use_selection ? selection_start() : caret_offset_;
+    const qint64 visible_length = qMin<qint64>(use_selection ? selection_size() : 8, 8);
+    if (visible_length <= 0) {
+        return fail(QStringLiteral("No bytes available at the current location."));
+    }
+
+    QByteArray replacement;
+    if (section == QStringLiteral("Overview") && field == QStringLiteral("Bytes")) {
+        if (!try_parse_hex_string(value, replacement)) {
+            return fail(QStringLiteral("Enter bytes as hex pairs such as DE AD BE EF."));
+        }
+        if (replacement.size() != visible_length) {
+            return fail(QStringLiteral("Byte edit must match the visible inspector width."));
+        }
+    } else if (section == QStringLiteral("Overview") && field == QStringLiteral("ASCII")) {
+        const QByteArray ascii = value.toLatin1();
+        if (ascii.size() != visible_length) {
+            return fail(QStringLiteral("ASCII edit must match the visible inspector width."));
+        }
+        replacement = ascii;
+    } else if (section == QStringLiteral("Integers")) {
+        bool ok = false;
+        if (field.startsWith(QLatin1Char('u'))) {
+            const int bits = field.mid(1).toInt(&ok);
+            if (!ok || bits % 8 != 0) {
+                return fail(QStringLiteral("Unsupported unsigned integer width."));
+            }
+            const int width = bits / 8;
+            bool parse_ok = false;
+            const qulonglong parsed = value.trimmed().toULongLong(&parse_ok, 0);
+            if (!parse_ok) {
+                return fail(QStringLiteral("Invalid unsigned integer value."));
+            }
+            if (bits < 64) {
+                const qulonglong max_value = (1ULL << bits) - 1ULL;
+                if (parsed > max_value) {
+                    return fail(QStringLiteral("Value is out of range for %1.").arg(field));
+                }
+            }
+            replacement.resize(width);
+            for (int i = 0; i < width; ++i) {
+                const int index = inspector_endian_ == InspectorEndian::Little ? i : (width - 1 - i);
+                replacement[index] = static_cast<char>((parsed >> (i * 8)) & 0xFFU);
+            }
+        } else if (field.startsWith(QLatin1Char('i'))) {
+            const int bits = field.mid(1).toInt(&ok);
+            if (!ok || bits % 8 != 0) {
+                return fail(QStringLiteral("Unsupported signed integer width."));
+            }
+            const int width = bits / 8;
+            bool parse_ok = false;
+            const qlonglong parsed = value.trimmed().toLongLong(&parse_ok, 0);
+            if (!parse_ok) {
+                return fail(QStringLiteral("Invalid signed integer value."));
+            }
+            if (bits < 64) {
+                const qlonglong min_value = -(1LL << (bits - 1));
+                const qlonglong max_value = (1LL << (bits - 1)) - 1LL;
+                if (parsed < min_value || parsed > max_value) {
+                    return fail(QStringLiteral("Value is out of range for %1.").arg(field));
+                }
+            }
+            const quint64 raw = static_cast<quint64>(parsed);
+            replacement.resize(width);
+            for (int i = 0; i < width; ++i) {
+                const int index = inspector_endian_ == InspectorEndian::Little ? i : (width - 1 - i);
+                replacement[index] = static_cast<char>((raw >> (i * 8)) & 0xFFU);
+            }
+        }
+    } else if (section == QStringLiteral("Floating Point")) {
+        bool ok = false;
+        const double parsed = value.trimmed().toDouble(&ok);
+        if (!ok) {
+            return fail(QStringLiteral("Invalid floating-point value."));
+        }
+        if (field == QStringLiteral("f32")) {
+            float number = static_cast<float>(parsed);
+            replacement.resize(4);
+            std::memcpy(replacement.data(), &number, sizeof(float));
+            if (inspector_endian_ == InspectorEndian::Big) {
+                std::reverse(replacement.begin(), replacement.end());
+            }
+        } else if (field == QStringLiteral("f64")) {
+            double number = parsed;
+            replacement.resize(8);
+            std::memcpy(replacement.data(), &number, sizeof(double));
+            if (inspector_endian_ == InspectorEndian::Big) {
+                std::reverse(replacement.begin(), replacement.end());
+            }
+        } else {
+            return fail(QStringLiteral("Unsupported floating-point field."));
+        }
+    } else if (section == QStringLiteral("Network") && field == QStringLiteral("IPv4")) {
+        const QStringList parts = value.trimmed().split(QLatin1Char('.'));
+        if (parts.size() != 4) {
+            return fail(QStringLiteral("IPv4 must contain four dot-separated octets."));
+        }
+
+        replacement.resize(4);
+        for (int index = 0; index < 4; ++index) {
+            bool ok = false;
+            const int octet = parts.at(index).toInt(&ok);
+            if (!ok || octet < 0 || octet > 255) {
+                return fail(QStringLiteral("IPv4 octets must be between 0 and 255."));
+            }
+            replacement[index] = static_cast<char>(octet);
+        }
+    } else {
+        return fail(QStringLiteral("This inspector field is read-only."));
+    }
+
+    if (replacement.isEmpty()) {
+        return fail(QStringLiteral("No writable bytes were produced for this field."));
+    }
+
+    if (!source_.overwrite_range(start_offset, replacement)) {
+        return fail(QStringLiteral("Failed to write the updated bytes."));
+    }
+
+    selection_anchor_ = start_offset;
+    selection_active_ = replacement.size() > 1;
+    caret_offset_ = start_offset + qMax(0, replacement.size() - 1);
+    high_nibble_pending_ = true;
+    pending_insert_high_nibble_ = -1;
+    refresh_after_edit();
+    return true;
 }
 
 void HexView::toggle_bookmark_at_caret() {
@@ -724,7 +982,8 @@ void HexView::paintEvent(QPaintEvent* event) {
         return;
     }
 
-    const qint64 first_row = first_visible_row();
+    first_visible_row_ = qBound<qint64>(0, first_visible_row_, max_first_visible_row());
+    const qint64 first_row = first_visible_row_;
     const qint64 rows = visible_row_count();
     ensure_row_cache(first_row, rows);
 
@@ -733,17 +992,22 @@ void HexView::paintEvent(QPaintEvent* event) {
 
     painter.fillRect(QRect(0, 0, viewport()->width(), metrics_.row_header), header_background);
     painter.fillRect(QRect(0, metrics_.row_header, metrics_.hex_start - 12, viewport()->height() - metrics_.row_header), gutter_background);
-    painter.fillRect(QRect(metrics_.marker_start, 0, metrics_.marker_width, viewport()->height()), QColor(224, 230, 239));
+    if (metrics_.marker_width > 0) {
+        painter.fillRect(QRect(metrics_.marker_start, 0, metrics_.marker_width, viewport()->height()), QColor(224, 230, 239));
+    }
     painter.fillRect(QRect(metrics_.hex_start - 6, 0, 1, viewport()->height()), grid_line);
     painter.fillRect(QRect(metrics_.ascii_start - 10, 0, 1, viewport()->height()), grid_line);
+    painter.fillRect(QRect(metrics_.ascii_start + static_cast<int>(bytes_per_row_) * metrics_.ascii_cell_width, 0, 1, viewport()->height()), grid_line);
     painter.setPen(secondary_text);
     painter.drawLine(0, metrics_.row_header, viewport()->width(), metrics_.row_header);
-    painter.drawText(QRect(metrics_.marker_start, 0, metrics_.marker_width, metrics_.row_header - 2),
-        Qt::AlignCenter, QStringLiteral("Bk"));
-    painter.drawText(QRect(metrics_.row_number_start, 0, metrics_.row_number_width, metrics_.row_header - 2),
-        Qt::AlignCenter, QStringLiteral("Row"));
-    painter.drawText(QRect(metrics_.address_start, 0, metrics_.address_width, metrics_.row_header - 2),
-        Qt::AlignCenter, QStringLiteral("Offset"));
+    if (metrics_.row_number_width > 0) {
+        painter.drawText(QRect(metrics_.row_number_start, 0, metrics_.row_number_width, metrics_.row_header - 2),
+            Qt::AlignCenter, QStringLiteral("Row"));
+    }
+    if (metrics_.address_width > 0) {
+        painter.drawText(QRect(metrics_.address_start, 0, metrics_.address_width, metrics_.row_header - 2),
+            Qt::AlignCenter, QStringLiteral("Offset"));
+    }
     painter.drawText(QRect(metrics_.hex_start, 0, static_cast<int>(bytes_per_row_) * metrics_.hex_cell_width, metrics_.row_header / 2),
         Qt::AlignCenter, QStringLiteral("Hex Values"));
     painter.drawText(QRect(metrics_.ascii_start, 0, static_cast<int>(bytes_per_row_) * metrics_.ascii_cell_width, metrics_.row_header - 2),
@@ -772,12 +1036,18 @@ void HexView::paintEvent(QPaintEvent* event) {
 
         painter.setPen(secondary_text);
         const bool row_bookmarked = has_bookmark(cached_row.row_offset);
-        painter.drawText(QRect(metrics_.marker_start, y, metrics_.marker_width, metrics_.line_height),
-            Qt::AlignCenter, row_bookmarked ? QStringLiteral("*") : (current_row ? QStringLiteral(">") : QString()));
-        painter.drawText(QRect(metrics_.row_number_start, y, metrics_.row_number_width, metrics_.line_height),
-            Qt::AlignCenter, cached_row.row_number_text);
-        painter.drawText(QRect(metrics_.address_start, y, metrics_.address_width, metrics_.line_height),
-            Qt::AlignCenter, cached_row.offset_text);
+        if (metrics_.marker_width > 0) {
+            painter.drawText(QRect(metrics_.marker_start, y, metrics_.marker_width, metrics_.line_height),
+                Qt::AlignCenter, row_bookmarked ? QStringLiteral("*") : (current_row ? QStringLiteral(">") : QString()));
+        }
+        if (metrics_.row_number_width > 0) {
+            painter.drawText(QRect(metrics_.row_number_start, y, metrics_.row_number_width, metrics_.line_height),
+                Qt::AlignCenter, cached_row.row_number_text);
+        }
+        if (metrics_.address_width > 0) {
+            painter.drawText(QRect(metrics_.address_start, y, metrics_.address_width, metrics_.line_height),
+                Qt::AlignCenter, cached_row.offset_text);
+        }
 
         for (int column = 0; column < cached_row.bytes.size(); ++column) {
             const qint64 offset = cached_row.row_offset + column;
@@ -899,7 +1169,21 @@ void HexView::keyPressEvent(QKeyEvent* event) {
 }
 
 void HexView::mousePressEvent(QMouseEvent* event) {
-    if (!has_document() || event->button() != Qt::LeftButton) {
+    if (event->button() != Qt::LeftButton) {
+        QAbstractScrollArea::mousePressEvent(event);
+        return;
+    }
+
+    if (event->pos().y() <= metrics_.row_header) {
+        active_divider_ = divider_at(event->pos());
+        if (active_divider_ != HeaderDivider::None) {
+            update_resize_cursor(event->pos());
+            event->accept();
+            return;
+        }
+    }
+
+    if (!has_document()) {
         QAbstractScrollArea::mousePressEvent(event);
         return;
     }
@@ -913,11 +1197,46 @@ void HexView::mousePressEvent(QMouseEvent* event) {
 }
 
 void HexView::mouseMoveEvent(QMouseEvent* event) {
+    if (active_divider_ != HeaderDivider::None) {
+        const int min_row_width = 44;
+        const int min_address_width = 92;
+        switch (active_divider_) {
+        case HeaderDivider::RowOffset:
+            if (show_row_numbers_) {
+                custom_row_number_width_ = qMax(min_row_width, event->pos().x() - metrics_.row_number_start);
+                refresh_metrics();
+                viewport()->update();
+            }
+            break;
+        case HeaderDivider::OffsetHex:
+            if (show_offsets_) {
+                custom_address_width_ = qMax(min_address_width, event->pos().x() - metrics_.address_start - 12);
+                refresh_metrics();
+                viewport()->update();
+            }
+            break;
+        case HeaderDivider::HexText: {
+            const int desired = qBound(4, static_cast<int>((event->pos().x() - metrics_.hex_start - 24 + (metrics_.hex_cell_width / 2)) / metrics_.hex_cell_width), 64);
+            if (desired != bytes_per_row_) {
+                set_bytes_per_row(desired);
+            }
+            break;
+        }
+        case HeaderDivider::None:
+            break;
+        }
+        update_resize_cursor(event->pos());
+        event->accept();
+        return;
+    }
+
     const qint64 hovered = has_document() ? offset_at(event->pos()) : -1;
     if (hovered != hovered_offset_) {
         hovered_offset_ = hovered;
         viewport()->update();
     }
+
+    update_resize_cursor(event->pos());
 
     if (!has_document() || !(event->buttons() & Qt::LeftButton) || selection_anchor_ < 0) {
         QAbstractScrollArea::mouseMoveEvent(event);
@@ -926,6 +1245,17 @@ void HexView::mouseMoveEvent(QMouseEvent* event) {
 
     selection_active_ = true;
     move_caret(offset_at(event->pos()), true);
+}
+
+void HexView::mouseReleaseEvent(QMouseEvent* event) {
+    if (event->button() == Qt::LeftButton && active_divider_ != HeaderDivider::None) {
+        active_divider_ = HeaderDivider::None;
+        update_resize_cursor(event->pos());
+        event->accept();
+        return;
+    }
+
+    QAbstractScrollArea::mouseReleaseEvent(event);
 }
 
 void HexView::wheelEvent(QWheelEvent* event) {
@@ -941,6 +1271,9 @@ void HexView::wheelEvent(QWheelEvent* event) {
 
 void HexView::leaveEvent(QEvent* event) {
     hovered_offset_ = -1;
+    if (active_divider_ == HeaderDivider::None) {
+        viewport()->unsetCursor();
+    }
     viewport()->update();
     QAbstractScrollArea::leaveEvent(event);
 }
@@ -951,9 +1284,28 @@ void HexView::refresh_metrics() {
     metrics_.char_width = qMax(1, metrics.horizontalAdvance(QLatin1Char('9')));
     metrics_.hex_cell_width = metrics.horizontalAdvance(QStringLiteral("FF")) + 16;
     metrics_.ascii_cell_width = metrics.horizontalAdvance(QLatin1Char('.')) + 10;
-    metrics_.marker_width = 18;
-    metrics_.row_number_width = metrics.horizontalAdvance(QStringLiteral("999999")) + 24;
-    metrics_.address_width = metrics.horizontalAdvance(QStringLiteral("0000000000000000")) + 30;
+    metrics_.marker_width = show_bookmark_gutter_ ? 18 : 0;
+    const int default_row_number_width = metrics.horizontalAdvance(QStringLiteral("999999")) + 24;
+    const qint64 max_offset = qMax<qint64>(0, document_size() - 1);
+    const QString offset_sample = QStringLiteral("%1").arg(static_cast<qulonglong>(max_offset), 0, 16).toUpper();
+    const int default_address_width = metrics.horizontalAdvance(QStringLiteral("0x") + offset_sample) + 18;
+    metrics_.row_number_width = show_row_numbers_ ? qMax(44, custom_row_number_width_ > 0 ? custom_row_number_width_ : default_row_number_width) : 0;
+    metrics_.address_width = show_offsets_ ? (custom_address_width_ > 0 ? qMax(64, custom_address_width_) : default_address_width) : 0;
+    const int minimum_hex_space = 4 * metrics_.hex_cell_width + 4 * metrics_.ascii_cell_width + 48;
+    const int max_gutter_width = qMax(0, viewport()->width() - minimum_hex_space);
+    int gutter_width = metrics_.marker_width + metrics_.row_number_width + metrics_.address_width;
+    if (gutter_width > max_gutter_width) {
+        int overflow = gutter_width - max_gutter_width;
+        if (metrics_.address_width > 0) {
+            const int shrink = qMin(overflow, qMax(0, metrics_.address_width - 48));
+            metrics_.address_width -= qMax(0, shrink);
+            overflow -= qMax(0, shrink);
+        }
+        if (overflow > 0 && metrics_.row_number_width > 0) {
+            const int shrink = qMin(overflow, qMax(0, metrics_.row_number_width - 32));
+            metrics_.row_number_width -= qMax(0, shrink);
+        }
+    }
     metrics_.marker_start = 0;
     metrics_.row_number_start = metrics_.marker_start + metrics_.marker_width;
     metrics_.address_start = metrics_.row_number_start + metrics_.row_number_width;
@@ -964,10 +1316,19 @@ void HexView::refresh_metrics() {
 
 void HexView::refresh_scrollbar() {
     const qint64 rows = total_rows();
-    const qint64 visible = visible_row_count();
+    const qint64 visible = fully_visible_row_count();
+    const qint64 max_row = max_first_visible_row();
+    first_visible_row_ = qBound<qint64>(0, first_visible_row_, max_row);
 
-    verticalScrollBar()->setPageStep(static_cast<int>(qMin<qint64>(visible, kScrollbarResolution)));
-    verticalScrollBar()->setRange(0, rows > visible ? kScrollbarResolution : 0);
+    if (max_row <= kDirectScrollbarMax) {
+        verticalScrollBar()->setPageStep(static_cast<int>(qMin<qint64>(visible, kDirectScrollbarMax)));
+        verticalScrollBar()->setSingleStep(1);
+        verticalScrollBar()->setRange(0, static_cast<int>(max_row));
+    } else {
+        verticalScrollBar()->setPageStep(static_cast<int>(qMin<qint64>(visible, kScrollbarResolution)));
+        verticalScrollBar()->setSingleStep(1);
+        verticalScrollBar()->setRange(0, rows > visible ? kScrollbarResolution : 0);
+    }
     const int target_value = row_to_slider(first_visible_row_);
     if (verticalScrollBar()->value() != target_value) {
         verticalScrollBar()->setValue(target_value);
@@ -979,6 +1340,10 @@ void HexView::invalidate_row_cache() {
     cached_row_count_ = -1;
     cached_generation_ = -1;
     cached_rows_.clear();
+}
+
+qint64 HexView::max_first_visible_row() const {
+    return qMax<qint64>(0, total_rows() - fully_visible_row_count());
 }
 
 void HexView::ensure_row_cache(qint64 first_row, qint64 row_count) {
@@ -1014,7 +1379,7 @@ void HexView::ensure_row_cache(qint64 first_row, qint64 row_count) {
         cached_row.row_offset = row_offset;
         cached_row.bytes = bytes.mid(byte_start, byte_count);
         cached_row.row_number_text = QStringLiteral("%1").arg(cached_row.row_number);
-        cached_row.offset_text = QStringLiteral("%1").arg(cached_row.row_offset, 8, 16, QChar(u'0')).toUpper();
+        cached_row.offset_text = formatted_offset(cached_row.row_offset);
         cached_row.ascii_text.reserve(byte_count);
         for (int i = 0; i < byte_count; ++i) {
             cached_row.ascii_text.append(printable_char(static_cast<quint8>(cached_row.bytes.at(i))));
@@ -1083,7 +1448,7 @@ void HexView::ensure_caret_visible() {
 }
 
 void HexView::scroll_to_row(qint64 row) {
-    const qint64 max_row = qMax<qint64>(0, total_rows() - visible_row_count());
+    const qint64 max_row = max_first_visible_row();
     const qint64 next_row = qBound<qint64>(0, row, max_row);
     if (next_row == first_visible_row_) {
         return;
@@ -1100,7 +1465,12 @@ void HexView::scroll_to_row(qint64 row) {
 
 qint64 HexView::visible_row_count() const {
     const int height = qMax(0, viewport()->height() - metrics_.row_header);
-    return qMax<qint64>(1, height / metrics_.line_height + 1);
+    return qMax<qint64>(1, (height + metrics_.line_height - 1) / metrics_.line_height);
+}
+
+qint64 HexView::fully_visible_row_count() const {
+    const int height = qMax(0, viewport()->height() - metrics_.row_header);
+    return qMax<qint64>(1, height / metrics_.line_height);
 }
 
 qint64 HexView::total_rows() const {
@@ -1132,9 +1502,13 @@ qint64 HexView::clamp_offset(qint64 offset) const {
 }
 
 qint64 HexView::slider_to_row(int slider_value) const {
-    const qint64 max_row = qMax<qint64>(0, total_rows() - visible_row_count());
+    const qint64 max_row = max_first_visible_row();
     if (max_row == 0) {
         return 0;
+    }
+
+    if (max_row <= kDirectScrollbarMax) {
+        return qBound<qint64>(0, static_cast<qint64>(slider_value), max_row);
     }
 
     const double ratio = static_cast<double>(slider_value) / static_cast<double>(kScrollbarResolution);
@@ -1142,9 +1516,13 @@ qint64 HexView::slider_to_row(int slider_value) const {
 }
 
 int HexView::row_to_slider(qint64 row) const {
-    const qint64 max_row = qMax<qint64>(0, total_rows() - visible_row_count());
+    const qint64 max_row = max_first_visible_row();
     if (max_row == 0) {
         return 0;
+    }
+
+    if (max_row <= kDirectScrollbarMax) {
+        return static_cast<int>(qBound<qint64>(0, row, max_row));
     }
 
     const double ratio = static_cast<double>(row) / static_cast<double>(max_row);
@@ -1190,6 +1568,40 @@ QRect HexView::header_cell_rect(qint64 column) const {
         0,
         metrics_.hex_cell_width,
         metrics_.row_header - 2);
+}
+
+HexView::HeaderDivider HexView::divider_at(const QPoint& point) const {
+    if (point.y() < 0 || point.y() > metrics_.row_header) {
+        return HeaderDivider::None;
+    }
+
+    constexpr int handle_slop = 4;
+    if (show_row_numbers_) {
+        const int row_offset_divider = metrics_.address_start;
+        if (qAbs(point.x() - row_offset_divider) <= handle_slop) {
+            return HeaderDivider::RowOffset;
+        }
+    }
+    if (show_offsets_) {
+        const int offset_hex_divider = metrics_.hex_start - 6;
+        if (qAbs(point.x() - offset_hex_divider) <= handle_slop) {
+            return HeaderDivider::OffsetHex;
+        }
+    }
+    const int hex_text_divider = metrics_.ascii_start - 10;
+    if (qAbs(point.x() - hex_text_divider) <= handle_slop) {
+        return HeaderDivider::HexText;
+    }
+
+    return HeaderDivider::None;
+}
+
+void HexView::update_resize_cursor(const QPoint& point) {
+    if (active_divider_ != HeaderDivider::None || divider_at(point) != HeaderDivider::None) {
+        viewport()->setCursor(Qt::SplitHCursor);
+    } else {
+        viewport()->unsetCursor();
+    }
 }
 
 QRect HexView::hex_cell_rect(int row_index, qint64 column) const {
@@ -1368,6 +1780,12 @@ QString HexView::hex_byte(quint8 value) const {
     return QStringLiteral("%1").arg(value, 2, 16, QChar(u'0')).toUpper();
 }
 
+QString HexView::formatted_offset(qint64 offset) const {
+    const qint64 max_offset = qMax<qint64>(0, document_size() - 1);
+    const int digits = qMax(1, QString::number(static_cast<qulonglong>(max_offset), 16).size());
+    return QStringLiteral("%1").arg(static_cast<qulonglong>(offset), digits, 16, QChar(u'0')).toUpper();
+}
+
 QChar HexView::printable_char(quint8 value) const {
     return (value >= 32 && value < 127) ? QChar(value) : QChar(u'.');
 }
@@ -1499,6 +1917,16 @@ QVector<HexView::InspectorRow> HexView::build_inspector_rows() const {
     add_row(QStringLiteral("Overview"), QStringLiteral("Endian"), inspector_endian_ == InspectorEndian::Little ? QStringLiteral("Little") : QStringLiteral("Big"));
     add_row(QStringLiteral("Overview"), QStringLiteral("Bytes"), hex_bytes);
     add_row(QStringLiteral("Overview"), QStringLiteral("ASCII"), ascii);
+    if (bytes.size() >= 4) {
+        add_row(
+            QStringLiteral("Network"),
+            QStringLiteral("IPv4"),
+            QStringLiteral("%1.%2.%3.%4")
+                .arg(static_cast<quint8>(bytes.at(0)))
+                .arg(static_cast<quint8>(bytes.at(1)))
+                .arg(static_cast<quint8>(bytes.at(2)))
+                .arg(static_cast<quint8>(bytes.at(3))));
+    }
 
     if (use_selection) {
         const int width = bytes.size();
@@ -1562,6 +1990,31 @@ QString HexView::format_inspector_text() const {
         text += QStringLiteral("%1: %2\n").arg(row.field, row.value);
     }
     return text;
+}
+
+bool HexView::try_parse_hex_string(const QString& text, QByteArray& bytes) {
+    QString normalized = text.trimmed();
+    if (normalized.startsWith(QStringLiteral("0x"), Qt::CaseInsensitive)) {
+        normalized = normalized.mid(2);
+    }
+    normalized.remove(QLatin1Char(' '));
+    if (normalized.isEmpty() || normalized.size() % 2 != 0) {
+        return false;
+    }
+
+    QByteArray parsed;
+    parsed.reserve(normalized.size() / 2);
+    for (int index = 0; index < normalized.size(); index += 2) {
+        bool ok = false;
+        const auto byte = static_cast<char>(normalized.mid(index, 2).toUInt(&ok, 16));
+        if (!ok) {
+            return false;
+        }
+        parsed.append(byte);
+    }
+
+    bytes = parsed;
+    return true;
 }
 
 qint64 HexView::search_from(const QByteArray& pattern, qint64 start_offset, bool forward, qint64 range_start, qint64 range_end) const {

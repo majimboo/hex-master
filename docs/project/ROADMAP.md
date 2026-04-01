@@ -15,7 +15,8 @@ Already in place:
 - insert and overwrite modes
 - structural insert, delete, cut, and paste
 - search, replace, and search results navigation
-- inspector and checksum/hash docks
+- inspector editing and checksum/hash docks
+- configurable viewport layout with persisted view state
 - recent files, settings, session restore, and About dialog
 - unified versioning and GitHub release infrastructure
 

@@ -7,14 +7,16 @@
 class QDockWidget;
 class QLabel;
 class QAction;
-class QLineEdit;
+class QComboBox;
 class QTextEdit;
 class QTreeWidget;
+class QTreeWidgetItem;
 class QCloseEvent;
 class HexView;
 class QActionGroup;
 class QToolBar;
 class QMenu;
+class QWidget;
 
 class MainWindow final : public QMainWindow {
     Q_OBJECT
@@ -59,6 +61,12 @@ private:
         FindAll,
     };
 
+    enum class SaveBackupPolicy {
+        Ask,
+        Always,
+        Never,
+    };
+
     void setup_menu();
     void setup_central_widget();
     void setup_docks();
@@ -70,6 +78,13 @@ private:
     void restore_session();
     void save_session() const;
     void add_recent_file(const QString& path);
+    void add_goto_offset_history(const QString& text);
+    void refresh_goto_offset_widgets();
+    SaveBackupPolicy save_backup_policy() const;
+    bool confirm_explicit_save(const QString& title) const;
+    bool prepare_backup_for_save(const QString& path);
+    bool save_current_document(bool confirm_save, const QString* save_as_path = nullptr);
+    static QString backup_path_for(const QString& path);
     bool confirm_discard_changes();
     bool open_file_path(const QString& path);
     void closeEvent(QCloseEvent* event) override;
@@ -104,11 +119,20 @@ private:
     void replace_all();
     void set_inspector_little_endian();
     void set_inspector_big_endian();
+    void set_bookmark_gutter_visible(bool visible);
+    void set_row_numbers_visible(bool visible);
+    void set_offsets_visible(bool visible);
+    void increase_bytes_per_row();
+    void decrease_bytes_per_row();
+    void reset_view();
     void update_status(qulonglong caret_offset, qulonglong selection_size, qulonglong document_size);
     void update_window_title(const QString& title, qulonglong document_size);
     void run_search(bool forward, bool from_caret, bool selection_only = false);
     void run_find_all(bool selection_only);
     void update_inspector_view(const QString& text);
+    void update_analysis_view(bool selection_only);
+    void handle_inspector_item_changed(QTreeWidgetItem* item, int column);
+    void copy_current_tree_value(QTreeWidget* tree);
     void show_search_summary(const QString& summary);
     void show_search_matches(const QString& summary, const QVector<qint64>& matches);
     void activate_search_result_item();
@@ -141,11 +165,12 @@ private:
     QDockWidget* analysis_dock_ = nullptr;
     QTreeWidget* inspector_tree_ = nullptr;
     QTreeWidget* search_results_tree_ = nullptr;
+    QTreeWidget* analysis_tree_ = nullptr;
     QTextEdit* bookmarks_text_ = nullptr;
-    QTextEdit* analysis_text_ = nullptr;
     QLabel* status_label_ = nullptr;
     QToolBar* toolbar_ = nullptr;
-    QLineEdit* goto_offset_edit_ = nullptr;
+    QWidget* edit_mode_toggle_ = nullptr;
+    QComboBox* goto_offset_edit_ = nullptr;
     QAction* open_action_ = nullptr;
     QAction* new_action_ = nullptr;
     QAction* save_action_ = nullptr;
@@ -175,6 +200,13 @@ private:
     QActionGroup* inspector_endian_group_ = nullptr;
     QActionGroup* edit_mode_group_ = nullptr;
     QMenu* recent_files_menu_ = nullptr;
+    QAction* show_bookmark_gutter_action_ = nullptr;
+    QAction* show_row_numbers_action_ = nullptr;
+    QAction* show_offsets_action_ = nullptr;
+    QAction* increase_width_action_ = nullptr;
+    QAction* decrease_width_action_ = nullptr;
+    QAction* reset_view_action_ = nullptr;
+    bool updating_inspector_tree_ = false;
     bool last_dirty_state_ = false;
     QByteArray last_search_pattern_;
     bool last_search_hex_mode_ = false;
@@ -184,4 +216,5 @@ private:
     SearchByteOrder last_search_numeric_byte_order_ = SearchByteOrder::Little;
     QString last_search_display_text_;
     QStringList recent_files_;
+    QStringList goto_offset_history_;
 };

@@ -26,14 +26,64 @@
 #include <QStackedWidget>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
+#include <QPalette>
 #include <QSettings>
 #include <QStatusBar>
 #include <QTextEdit>
 #include <QTreeWidget>
 #include <QHeaderView>
+#include <QStyledItemDelegate>
 #include <QToolBar>
+#include <QToolButton>
+#include <QWidget>
 
 #include <limits>
+
+namespace {
+class TreeValueDelegate final : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+    QWidget* createEditor(QWidget* parent, const QStyleOptionViewItem& option, const QModelIndex& index) const override {
+        Q_UNUSED(option);
+        Q_UNUSED(index);
+        QWidget* editor = QStyledItemDelegate::createEditor(parent, option, index);
+        if (auto* line_edit = qobject_cast<QLineEdit*>(editor)) {
+            QPalette palette = line_edit->palette();
+            palette.setColor(QPalette::Base, QColor(43, 108, 176));
+            palette.setColor(QPalette::Text, QColor(255, 255, 255));
+            palette.setColor(QPalette::Highlight, QColor(173, 216, 255));
+            palette.setColor(QPalette::HighlightedText, QColor(24, 32, 40));
+            line_edit->setPalette(palette);
+            line_edit->setAutoFillBackground(true);
+            line_edit->setFrame(false);
+            line_edit->setContentsMargins(0, 0, 0, 0);
+            line_edit->setTextMargins(0, 0, 0, 0);
+            line_edit->setStyleSheet(QStringLiteral(
+                "QLineEdit {"
+                " margin: 0px;"
+                " padding: 0px;"
+                " border: 0px;"
+                " background: #2b6cb0;"
+                " color: white;"
+                " selection-background-color: #add8ff;"
+                " selection-color: #182028;"
+                "}"
+            ));
+        }
+        return editor;
+    }
+
+    void updateEditorGeometry(QWidget* editor, const QStyleOptionViewItem& option, const QModelIndex& index) const override {
+        Q_UNUSED(index);
+        editor->setGeometry(option.rect);
+    }
+};
+
+QString color_css(const QColor& color) {
+    return color.name(QColor::HexRgb);
+}
+}
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle("Hex Master");
@@ -202,13 +252,29 @@ void MainWindow::update_recent_files_menu() {
 void MainWindow::restore_session() {
     QSettings settings;
     recent_files_ = settings.value(QStringLiteral("recentFiles")).toStringList();
+    goto_offset_history_ = settings.value(QStringLiteral("gotoOffsetHistory")).toStringList();
     update_recent_files_menu();
+    refresh_goto_offset_widgets();
 
     restoreGeometry(settings.value(QStringLiteral("window/geometry")).toByteArray());
     restoreState(settings.value(QStringLiteral("window/state")).toByteArray());
 
     const int bytes_per_row = settings.value(QStringLiteral("editor/bytesPerRow"), 16).toInt();
     hex_view_->set_bytes_per_row(bytes_per_row);
+    hex_view_->set_bookmark_gutter_visible(settings.value(QStringLiteral("view/showBookmarkGutter"), true).toBool());
+    hex_view_->set_row_numbers_visible(settings.value(QStringLiteral("view/showRowNumbers"), false).toBool());
+    hex_view_->set_offsets_visible(settings.value(QStringLiteral("view/showOffsets"), true).toBool());
+    hex_view_->set_row_number_column_width(settings.value(QStringLiteral("view/rowNumberWidth"), -1).toInt());
+    hex_view_->set_offset_column_width(settings.value(QStringLiteral("view/offsetWidth"), -1).toInt());
+    if (show_bookmark_gutter_action_ != nullptr) {
+        show_bookmark_gutter_action_->setChecked(hex_view_->bookmark_gutter_visible());
+    }
+    if (show_row_numbers_action_ != nullptr) {
+        show_row_numbers_action_->setChecked(hex_view_->row_numbers_visible());
+    }
+    if (show_offsets_action_ != nullptr) {
+        show_offsets_action_->setChecked(hex_view_->offsets_visible());
+    }
 
     const auto endian = settings.value(QStringLiteral("inspector/endian"), QStringLiteral("little")).toString();
     if (endian == QStringLiteral("big")) {
@@ -227,9 +293,15 @@ void MainWindow::restore_session() {
 void MainWindow::save_session() const {
     QSettings settings;
     settings.setValue(QStringLiteral("recentFiles"), recent_files_);
+    settings.setValue(QStringLiteral("gotoOffsetHistory"), goto_offset_history_);
     settings.setValue(QStringLiteral("window/geometry"), saveGeometry());
     settings.setValue(QStringLiteral("window/state"), saveState());
     settings.setValue(QStringLiteral("editor/bytesPerRow"), hex_view_ ? hex_view_->bytes_per_row() : 16);
+    settings.setValue(QStringLiteral("view/showBookmarkGutter"), hex_view_ ? hex_view_->bookmark_gutter_visible() : true);
+    settings.setValue(QStringLiteral("view/showRowNumbers"), hex_view_ ? hex_view_->row_numbers_visible() : false);
+    settings.setValue(QStringLiteral("view/showOffsets"), hex_view_ ? hex_view_->offsets_visible() : true);
+    settings.setValue(QStringLiteral("view/rowNumberWidth"), hex_view_ ? hex_view_->row_number_column_width() : -1);
+    settings.setValue(QStringLiteral("view/offsetWidth"), hex_view_ ? hex_view_->offset_column_width() : -1);
     settings.setValue(
         QStringLiteral("inspector/endian"),
         hex_view_ && hex_view_->inspector_endian() == HexView::InspectorEndian::Big ? QStringLiteral("big") : QStringLiteral("little"));
@@ -249,6 +321,148 @@ void MainWindow::add_recent_file(const QString& path) {
     update_recent_files_menu();
 }
 
+void MainWindow::add_goto_offset_history(const QString& text) {
+    const QString normalized = text.trimmed();
+    if (normalized.isEmpty()) {
+        return;
+    }
+
+    goto_offset_history_.removeAll(normalized);
+    goto_offset_history_.prepend(normalized);
+    while (goto_offset_history_.size() > 10) {
+        goto_offset_history_.removeLast();
+    }
+    refresh_goto_offset_widgets();
+}
+
+void MainWindow::refresh_goto_offset_widgets() {
+    if (goto_offset_edit_ == nullptr) {
+        return;
+    }
+
+    const QString current_text = goto_offset_edit_->currentText();
+    goto_offset_edit_->blockSignals(true);
+    goto_offset_edit_->clear();
+    goto_offset_edit_->addItems(goto_offset_history_);
+    goto_offset_edit_->setCurrentText(current_text);
+    goto_offset_edit_->blockSignals(false);
+}
+
+MainWindow::SaveBackupPolicy MainWindow::save_backup_policy() const {
+    QSettings settings;
+    return static_cast<SaveBackupPolicy>(settings.value(QStringLiteral("settings/saveBackupPolicy"), static_cast<int>(SaveBackupPolicy::Ask)).toInt());
+}
+
+bool MainWindow::confirm_explicit_save(const QString& title) const {
+    const auto response = QMessageBox::question(
+        const_cast<MainWindow*>(this),
+        QStringLiteral("Confirm Save"),
+        QStringLiteral("Save changes to %1?").arg(title),
+        QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::Yes);
+    return response == QMessageBox::Yes;
+}
+
+QString MainWindow::backup_path_for(const QString& path) {
+    const QFileInfo info(path);
+    if (!info.exists()) {
+        return QString();
+    }
+
+    if (info.suffix().isEmpty()) {
+        return path + QStringLiteral(".bak");
+    }
+
+    return info.path() + QDir::separator() + info.completeBaseName() + QStringLiteral(".") + info.suffix() + QStringLiteral(".bak");
+}
+
+bool MainWindow::prepare_backup_for_save(const QString& path) {
+    const QFileInfo info(path);
+    if (path.isEmpty() || !info.exists()) {
+        return true;
+    }
+
+    SaveBackupPolicy policy = save_backup_policy();
+    if (policy == SaveBackupPolicy::Ask) {
+        const auto response = QMessageBox::question(
+            this,
+            QStringLiteral("Create Backup"),
+            QStringLiteral("Create a backup copy before saving?"),
+            QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel,
+            QMessageBox::Yes);
+        if (response == QMessageBox::Cancel) {
+            return false;
+        }
+        policy = response == QMessageBox::Yes ? SaveBackupPolicy::Always : SaveBackupPolicy::Never;
+    }
+
+    if (policy == SaveBackupPolicy::Never) {
+        return true;
+    }
+
+    const QString backup_path = backup_path_for(path);
+    if (backup_path.isEmpty()) {
+        return true;
+    }
+
+    if (QFile::exists(backup_path) && !QFile::remove(backup_path)) {
+        QMessageBox::warning(this, QStringLiteral("Backup Failed"), QStringLiteral("Could not replace the existing backup file."));
+        return false;
+    }
+
+    if (!QFile::copy(path, backup_path)) {
+        QMessageBox::warning(this, QStringLiteral("Backup Failed"), QStringLiteral("Could not create a backup copy before saving."));
+        return false;
+    }
+
+    return true;
+}
+
+bool MainWindow::save_current_document(bool confirm_save, const QString* save_as_path) {
+    if (hex_view_ == nullptr || !hex_view_->has_document()) {
+        statusBar()->showMessage(QStringLiteral("Open a file before saving."), 3000);
+        return false;
+    }
+
+    const bool save_as = save_as_path != nullptr || hex_view_->is_read_only();
+    QString target_path = save_as_path != nullptr ? *save_as_path : QString();
+    if (save_as && target_path.isEmpty()) {
+        target_path = QFileDialog::getSaveFileName(this, QStringLiteral("Save File As"), hex_view_->document_path());
+        if (target_path.isEmpty()) {
+            return false;
+        }
+    }
+
+    const QString title = save_as ? QFileInfo(target_path).fileName() : hex_view_->document_title();
+    if (confirm_save && !confirm_explicit_save(title)) {
+        return false;
+    }
+
+    const QString backup_source_path = save_as ? target_path : hex_view_->document_path();
+    if (!prepare_backup_for_save(backup_source_path)) {
+        return false;
+    }
+
+    statusBar()->showMessage(QStringLiteral("Saving..."));
+    QApplication::setOverrideCursor(Qt::WaitCursor);
+    QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+    const bool saved = save_as ? hex_view_->save_as(target_path) : hex_view_->save();
+    QApplication::restoreOverrideCursor();
+    if (!saved) {
+        statusBar()->showMessage(save_as ? QStringLiteral("Save As failed.") : QStringLiteral("Save failed."), 4000);
+        return false;
+    }
+
+    if (save_as) {
+        add_recent_file(target_path);
+        statusBar()->showMessage(QStringLiteral("Saved %1").arg(QFileInfo(target_path).fileName()), 3000);
+    } else {
+        statusBar()->showMessage(QStringLiteral("Saved %1").arg(hex_view_->document_title()), 3000);
+    }
+
+    return true;
+}
+
 bool MainWindow::confirm_discard_changes() {
     if (hex_view_ == nullptr || !hex_view_->has_document() || !hex_view_->is_dirty()) {
         return true;
@@ -266,12 +480,7 @@ bool MainWindow::confirm_discard_changes() {
     }
 
     if (response == QMessageBox::Save) {
-        if (hex_view_->is_read_only()) {
-            save_file_as();
-        } else {
-            save_file();
-        }
-        return !hex_view_->is_dirty();
+        return save_current_document(false);
     }
 
     return true;
@@ -310,6 +519,28 @@ void MainWindow::closeEvent(QCloseEvent* event) {
 
 void MainWindow::setup_view_menu(QMenu* view_menu) {
     view_menu->addSeparator();
+    show_bookmark_gutter_action_ = view_menu->addAction(QStringLiteral("Show Bookmark Gutter"));
+    show_bookmark_gutter_action_->setCheckable(true);
+    show_bookmark_gutter_action_->setChecked(true);
+    connect(show_bookmark_gutter_action_, &QAction::toggled, this, &MainWindow::set_bookmark_gutter_visible);
+    show_row_numbers_action_ = view_menu->addAction(QStringLiteral("Show Row Numbers"));
+    show_row_numbers_action_->setCheckable(true);
+    show_row_numbers_action_->setChecked(false);
+    connect(show_row_numbers_action_, &QAction::toggled, this, &MainWindow::set_row_numbers_visible);
+    show_offsets_action_ = view_menu->addAction(QStringLiteral("Show Offsets"));
+    show_offsets_action_->setCheckable(true);
+    show_offsets_action_->setChecked(true);
+    connect(show_offsets_action_, &QAction::toggled, this, &MainWindow::set_offsets_visible);
+    view_menu->addSeparator();
+    decrease_width_action_ = view_menu->addAction(QStringLiteral("Narrower"));
+    decrease_width_action_->setShortcut(QKeySequence(QStringLiteral("Ctrl+-")));
+    connect(decrease_width_action_, &QAction::triggered, this, &MainWindow::decrease_bytes_per_row);
+    increase_width_action_ = view_menu->addAction(QStringLiteral("Wider"));
+    increase_width_action_->setShortcut(QKeySequence(QStringLiteral("Ctrl+=")));
+    connect(increase_width_action_, &QAction::triggered, this, &MainWindow::increase_bytes_per_row);
+    reset_view_action_ = view_menu->addAction(QStringLiteral("Reset View"));
+    connect(reset_view_action_, &QAction::triggered, this, &MainWindow::reset_view);
+    view_menu->addSeparator();
     auto* rowMenu = view_menu->addMenu("Bytes Per &Row");
     row_width_group_ = new QActionGroup(this);
     row_width_group_->setExclusive(true);
@@ -344,36 +575,141 @@ void MainWindow::setup_toolbar() {
     toolbar_->addAction(undo_action_);
     toolbar_->addAction(redo_action_);
     toolbar_->addSeparator();
-    toolbar_->addAction(insert_mode_action_);
-    toolbar_->addAction(overwrite_mode_action_);
+    edit_mode_toggle_ = new QWidget(toolbar_);
+    auto* edit_mode_layout = new QHBoxLayout(edit_mode_toggle_);
+    edit_mode_layout->setContentsMargins(0, 0, 0, 0);
+    edit_mode_layout->setSpacing(0);
+    auto* insert_button = new QToolButton(edit_mode_toggle_);
+    insert_button->setDefaultAction(insert_mode_action_);
+    insert_button->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    auto* divider = new QWidget(edit_mode_toggle_);
+    auto* overwrite_button = new QToolButton(edit_mode_toggle_);
+    overwrite_button->setDefaultAction(overwrite_mode_action_);
+    overwrite_button->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    insert_button->setCheckable(true);
+    overwrite_button->setCheckable(true);
+    insert_button->setAutoExclusive(true);
+    overwrite_button->setAutoExclusive(true);
+    insert_button->setAutoRaise(false);
+    overwrite_button->setAutoRaise(false);
+    insert_button->setFixedHeight(24);
+    overwrite_button->setFixedHeight(24);
+    insert_button->setFont(toolbar_->font());
+    overwrite_button->setFont(toolbar_->font());
+    divider->setFixedWidth(1);
+    divider->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
+    edit_mode_toggle_->setFixedHeight(24);
+    edit_mode_layout->addWidget(insert_button);
+    edit_mode_layout->addWidget(divider);
+    edit_mode_layout->addWidget(overwrite_button);
+    const QPalette button_palette = insert_button->palette();
+    const QColor normal_bg = button_palette.color(QPalette::Button);
+    const QColor normal_text = button_palette.color(QPalette::ButtonText);
+    const QColor border_color = button_palette.color(QPalette::Mid);
+    const QColor hover_bg = normal_bg.lighter(104);
+    const QColor active_bg = normal_bg.darker(108);
+    const QColor active_text = normal_text;
+    divider->setStyleSheet(QStringLiteral("background: %1;").arg(color_css(border_color)));
+    edit_mode_toggle_->setStyleSheet(QStringLiteral(
+        "QWidget {"
+        " border: 1px solid %1;"
+        " border-radius: 5px;"
+        " background: %2;"
+        "}"
+        "QToolButton {"
+        " min-width: 82px;"
+        " min-height: 24px;"
+        " max-height: 24px;"
+        " padding: 0px 12px;"
+        " margin: 0px;"
+        " border: 0px;"
+        " border-radius: 0px;"
+        " background: transparent;"
+        "}"
+        "QToolButton:first-of-type {"
+        " border-top-left-radius: 4px;"
+        " border-bottom-left-radius: 4px;"
+        "}"
+        "QToolButton:last-of-type {"
+        " border-top-right-radius: 4px;"
+        " border-bottom-right-radius: 4px;"
+        "}"
+        "QToolButton:checked, QToolButton:pressed {"
+        " background: %4;"
+        " color: %5;"
+        " border-top-left-radius: 4px;"
+        " border-bottom-left-radius: 4px;"
+        " border-top-right-radius: 4px;"
+        " border-bottom-right-radius: 4px;"
+        "}"
+        "QToolButton:hover:!checked {"
+        " background: %6;"
+        "}"
+    )
+        .arg(color_css(border_color))
+        .arg(color_css(normal_bg))
+        .arg(color_css(active_bg))
+        .arg(color_css(active_text))
+        .arg(color_css(hover_bg)));
+    toolbar_->addWidget(edit_mode_toggle_);
     toolbar_->addSeparator();
     toolbar_->addAction(toggle_bookmark_action_);
     toolbar_->addSeparator();
     toolbar_->addAction(find_action_);
     toolbar_->addSeparator();
-    toolbar_->addWidget(new QLabel("Goto:", toolbar_));
-    goto_offset_edit_ = new QLineEdit(toolbar_);
-    goto_offset_edit_->setClearButtonEnabled(true);
-    goto_offset_edit_->setPlaceholderText("0x0");
-    goto_offset_edit_->setMaximumWidth(120);
+    auto* goto_label = new QLabel("Goto:", toolbar_);
+    goto_label->setAlignment(Qt::AlignVCenter | Qt::AlignRight);
+    toolbar_->addWidget(goto_label);
+    goto_offset_edit_ = new QComboBox(toolbar_);
+    goto_offset_edit_->setEditable(true);
+    goto_offset_edit_->setInsertPolicy(QComboBox::NoInsert);
+    goto_offset_edit_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    goto_offset_edit_->setMinimumContentsLength(14);
+    goto_offset_edit_->setMinimumHeight(28);
+    goto_offset_edit_->setMaximumWidth(190);
+    goto_offset_edit_->setStyleSheet(QStringLiteral(
+        "QComboBox {"
+        " min-height: 28px;"
+        " padding: 2px 8px;"
+        " border: 1px solid #b8b2a6;"
+        " border-radius: 7px;"
+        " background: #fffdf8;"
+        "}"
+        "QComboBox::drop-down {"
+        " border: 0px;"
+        " width: 22px;"
+        "}"
+        "QComboBox QAbstractItemView {"
+        " selection-background-color: #e0d6c2;"
+        "}"
+    ));
+    if (goto_offset_edit_->lineEdit() != nullptr) {
+        goto_offset_edit_->lineEdit()->setClearButtonEnabled(true);
+        goto_offset_edit_->lineEdit()->setPlaceholderText("0x0");
+        goto_offset_edit_->lineEdit()->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
+    }
     toolbar_->addWidget(goto_offset_edit_);
     auto run_goto = [this]() {
         if (!goto_offset_edit_) {
             return;
         }
 
+        const QString text = goto_offset_edit_->currentText().trimmed();
         quint64 offset = 0;
-        if (!try_parse_offset(goto_offset_edit_->text(), offset)) {
+        if (!try_parse_offset(text, offset)) {
             statusBar()->showMessage(QStringLiteral("Invalid offset."), 2500);
             return;
         }
 
         if (hex_view_ && hex_view_->has_document()) {
             hex_view_->go_to_offset(static_cast<qint64>(offset));
+            add_goto_offset_history(text);
             statusBar()->showMessage(QStringLiteral("Moved to offset 0x%1").arg(offset, 0, 16), 2500);
         }
     };
-    connect(goto_offset_edit_, &QLineEdit::returnPressed, this, run_goto);
+    if (goto_offset_edit_->lineEdit() != nullptr) {
+        connect(goto_offset_edit_->lineEdit(), &QLineEdit::returnPressed, this, run_goto);
+    }
     auto* goto_now = toolbar_->addAction("Go");
     connect(goto_now, &QAction::triggered, this, run_goto);
 }
@@ -404,8 +740,22 @@ void MainWindow::setup_docks() {
     inspector_tree_->setHeaderLabels({QStringLiteral("Field"), QStringLiteral("Value")});
     inspector_tree_->header()->setStretchLastSection(true);
     inspector_tree_->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
-    inspector_tree_->setSelectionMode(QAbstractItemView::NoSelection);
-    inspector_tree_->setFocusPolicy(Qt::NoFocus);
+    inspector_tree_->setSelectionMode(QAbstractItemView::SingleSelection);
+    inspector_tree_->setSelectionBehavior(QAbstractItemView::SelectItems);
+    inspector_tree_->setFocusPolicy(Qt::StrongFocus);
+    inspector_tree_->setItemDelegate(new TreeValueDelegate(inspector_tree_));
+    inspector_tree_->setStyleSheet(QStringLiteral(
+        "QTreeWidget::item:selected {"
+        " background: #2b6cb0;"
+        " color: white;"
+        "}"
+    ));
+    connect(inspector_tree_, &QTreeWidget::itemChanged, this, &MainWindow::handle_inspector_item_changed);
+    auto* inspector_copy = new QAction(inspector_tree_);
+    inspector_copy->setText(QStringLiteral("Copy Value"));
+    inspector_tree_->setContextMenuPolicy(Qt::ActionsContextMenu);
+    inspector_tree_->addAction(inspector_copy);
+    connect(inspector_copy, &QAction::triggered, this, [this]() { copy_current_tree_value(inspector_tree_); });
     inspector_dock_->setWidget(inspector_tree_);
     inspector_dock_->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
     addDockWidget(Qt::RightDockWidgetArea, inspector_dock_);
@@ -418,6 +768,7 @@ void MainWindow::setup_docks() {
     bookmarks_dock_->setWidget(bookmarks_text_);
     bookmarks_dock_->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
     addDockWidget(Qt::LeftDockWidgetArea, bookmarks_dock_);
+    bookmarks_dock_->hide();
 
     search_results_dock_ = new QDockWidget("Search Results", this);
     search_results_tree_ = new QTreeWidget(search_results_dock_);
@@ -437,13 +788,34 @@ void MainWindow::setup_docks() {
     show_search_summary(QStringLiteral("No active search."));
 
     analysis_dock_ = new QDockWidget("Analysis", this);
-    analysis_text_ = new QTextEdit("Analysis\n\nOpen a file to compute hashes.", analysis_dock_);
-    analysis_text_->setReadOnly(true);
-    analysis_text_->setLineWrapMode(QTextEdit::NoWrap);
-    analysis_dock_->setWidget(analysis_text_);
+    analysis_tree_ = new QTreeWidget(analysis_dock_);
+    analysis_tree_->setRootIsDecorated(false);
+    analysis_tree_->setAlternatingRowColors(true);
+    analysis_tree_->setUniformRowHeights(true);
+    analysis_tree_->setColumnCount(2);
+    analysis_tree_->setHeaderLabels({QStringLiteral("Field"), QStringLiteral("Value")});
+    analysis_tree_->header()->setStretchLastSection(true);
+    analysis_tree_->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    analysis_tree_->setSelectionMode(QAbstractItemView::SingleSelection);
+    analysis_tree_->setSelectionBehavior(QAbstractItemView::SelectItems);
+    analysis_tree_->setFocusPolicy(Qt::StrongFocus);
+    analysis_tree_->setItemDelegate(new TreeValueDelegate(analysis_tree_));
+    analysis_tree_->setStyleSheet(QStringLiteral(
+        "QTreeWidget::item:selected {"
+        " background: #2b6cb0;"
+        " color: white;"
+        "}"
+    ));
+    auto* analysis_copy = new QAction(analysis_tree_);
+    analysis_copy->setText(QStringLiteral("Copy Value"));
+    analysis_tree_->setContextMenuPolicy(Qt::ActionsContextMenu);
+    analysis_tree_->addAction(analysis_copy);
+    connect(analysis_copy, &QAction::triggered, this, [this]() { copy_current_tree_value(analysis_tree_); });
+    analysis_dock_->setWidget(analysis_tree_);
     analysis_dock_->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea | Qt::BottomDockWidgetArea);
     addDockWidget(Qt::RightDockWidgetArea, analysis_dock_);
     tabifyDockWidget(inspector_dock_, analysis_dock_);
+    update_analysis_view(false);
 }
 
 void MainWindow::setup_status_bar() {
@@ -494,42 +866,12 @@ void MainWindow::open_recent_file() {
 }
 
 void MainWindow::save_file() {
-    if (!hex_view_->has_document()) {
-        statusBar()->showMessage(QStringLiteral("Open a file before saving."), 3000);
-        return;
-    }
-
-    if (hex_view_->is_read_only()) {
-        save_file_as();
-        return;
-    }
-
-    if (!hex_view_->save()) {
-        statusBar()->showMessage(QStringLiteral("Save failed."), 4000);
-        return;
-    }
-
-    statusBar()->showMessage(QStringLiteral("Saved %1").arg(hex_view_->document_title()), 3000);
+    save_current_document(true);
 }
 
 void MainWindow::save_file_as() {
-    if (!hex_view_->has_document()) {
-        statusBar()->showMessage(QStringLiteral("Open a file before saving."), 3000);
-        return;
-    }
-
-    const QString path = QFileDialog::getSaveFileName(this, "Save File As", hex_view_->document_path());
-    if (path.isEmpty()) {
-        return;
-    }
-
-    if (!hex_view_->save_as(path)) {
-        statusBar()->showMessage(QStringLiteral("Save As failed."), 4000);
-        return;
-    }
-
-    add_recent_file(path);
-    statusBar()->showMessage(QStringLiteral("Saved %1").arg(QFileInfo(path).fileName()), 3000);
+    const QString requested_path;
+    save_current_document(true, &requested_path);
 }
 
 void MainWindow::undo() {
@@ -570,23 +912,53 @@ void MainWindow::cut() {
 }
 
 void MainWindow::copy() {
-    if (!hex_view_ || !hex_view_->has_document()) {
+    QWidget* focus = QApplication::focusWidget();
+    if (analysis_tree_ != nullptr && (focus == analysis_tree_ || focus == analysis_tree_->viewport() || analysis_tree_->isAncestorOf(focus))) {
+        copy_current_tree_value(analysis_tree_);
         return;
     }
 
-    const QByteArray bytes = hex_view_->selected_bytes();
-    if (bytes.isEmpty()) {
+    if (inspector_tree_ != nullptr && (focus == inspector_tree_ || focus == inspector_tree_->viewport() || inspector_tree_->isAncestorOf(focus))) {
+        copy_current_tree_value(inspector_tree_);
+        return;
+    }
+
+    if (!hex_view_ || !hex_view_->has_document()) {
+        statusBar()->showMessage(QStringLiteral("Nothing to copy."), 2000);
+        return;
+    }
+
+    const QString text = hex_view_->active_pane() == HexView::ActivePane::Text
+        ? hex_view_->selected_text_text()
+        : hex_view_->selected_hex_text();
+    if (text.isEmpty()) {
         statusBar()->showMessage(QStringLiteral("Select a range before copying."), 2500);
         return;
     }
 
     auto* clipboard = QApplication::clipboard();
-    clipboard->setText(QString::fromLatin1(bytes.toHex(' ').toUpper()));
-    statusBar()->showMessage(QStringLiteral("Copied %1 bytes as hex text.").arg(bytes.size()), 2500);
+    clipboard->setText(text);
+    statusBar()->showMessage(
+        hex_view_->active_pane() == HexView::ActivePane::Text
+            ? QStringLiteral("Copied selected text.")
+            : QStringLiteral("Copied selected bytes as hex."),
+        2500);
 }
 
 void MainWindow::copy_as_hex() {
-    copy();
+    if (!hex_view_ || !hex_view_->has_document()) {
+        statusBar()->showMessage(QStringLiteral("Nothing to copy."), 2000);
+        return;
+    }
+
+    const QString text = hex_view_->selected_hex_text();
+    if (text.isEmpty()) {
+        statusBar()->showMessage(QStringLiteral("Select a range before copying."), 2500);
+        return;
+    }
+
+    QApplication::clipboard()->setText(text);
+    statusBar()->showMessage(QStringLiteral("Copied selected bytes as hex."), 2500);
 }
 
 void MainWindow::paste() {
@@ -715,12 +1087,8 @@ void MainWindow::compute_hashes() {
     statusBar()->showMessage(QStringLiteral("Computing hashes..."));
     QApplication::setOverrideCursor(Qt::WaitCursor);
     QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
-    const QString report = hex_view_->build_hash_report(selection_only);
+    update_analysis_view(selection_only);
     QApplication::restoreOverrideCursor();
-
-    if (analysis_text_ != nullptr) {
-        analysis_text_->setPlainText(report);
-    }
     if (analysis_dock_ != nullptr) {
         analysis_dock_->raise();
         analysis_dock_->show();
@@ -745,9 +1113,15 @@ void MainWindow::open_settings() {
     QSettings settings;
     auto* restore_session = new QCheckBox(QStringLiteral("Restore last open file on startup"), &dialog);
     restore_session->setChecked(settings.value(QStringLiteral("settings/restoreLastSession"), true).toBool());
+    auto* backup_policy = new QComboBox(&dialog);
+    backup_policy->addItem(QStringLiteral("Ask"), static_cast<int>(SaveBackupPolicy::Ask));
+    backup_policy->addItem(QStringLiteral("Always"), static_cast<int>(SaveBackupPolicy::Always));
+    backup_policy->addItem(QStringLiteral("Never"), static_cast<int>(SaveBackupPolicy::Never));
+    backup_policy->setCurrentIndex(backup_policy->findData(static_cast<int>(save_backup_policy())));
 
     layout->addRow(QStringLiteral("Bytes per row"), row_width);
     layout->addRow(QString(), restore_session);
+    layout->addRow(QStringLiteral("Backup file"), backup_policy);
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
     layout->addRow(buttons);
@@ -760,6 +1134,7 @@ void MainWindow::open_settings() {
 
     set_bytes_per_row(row_width->currentData().toInt());
     settings.setValue(QStringLiteral("settings/restoreLastSession"), restore_session->isChecked());
+    settings.setValue(QStringLiteral("settings/saveBackupPolicy"), backup_policy->currentData().toInt());
     statusBar()->showMessage(QStringLiteral("Settings updated."), 2500);
 }
 
@@ -1146,16 +1521,41 @@ void MainWindow::go_to_offset() {
         return;
     }
 
-    bool accepted = false;
-    const QString text = QInputDialog::getText(
-        this,
-        QStringLiteral("Go To Offset"),
-        QStringLiteral("Offset (decimal or 0x-prefixed hex):"),
-        QLineEdit::Normal,
-        QStringLiteral("0x%1").arg(hex_view_->document_size() > 0 ? 0 : 0),
-        &accepted);
+    QDialog dialog(this);
+    dialog.setWindowTitle(QStringLiteral("Go To Offset"));
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* prompt = new QLabel(QStringLiteral("Offset"), &dialog);
+    prompt->setStyleSheet(QStringLiteral("font-weight: 600;"));
+    layout->addWidget(prompt);
+    auto* combo = new QComboBox(&dialog);
+    combo->setEditable(true);
+    combo->setInsertPolicy(QComboBox::NoInsert);
+    combo->addItems(goto_offset_history_);
+    combo->setCurrentText(goto_offset_edit_ ? goto_offset_edit_->currentText() : QStringLiteral("0x0"));
+    combo->setMinimumWidth(320);
+    combo->setMinimumHeight(32);
+    if (combo->lineEdit() != nullptr) {
+        combo->lineEdit()->setClearButtonEnabled(true);
+        combo->lineEdit()->setPlaceholderText(QStringLiteral("0x0"));
+    }
+    layout->addWidget(combo);
 
-    if (!accepted || text.trimmed().isEmpty()) {
+    auto* hint = new QLabel(QStringLiteral("Enter a decimal offset or a hex value prefixed with 0x."), &dialog);
+    hint->setWordWrap(true);
+    hint->setStyleSheet(QStringLiteral("color: #5a6675;"));
+    layout->addWidget(hint);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    layout->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    const QString text = combo->currentText().trimmed();
+    if (text.isEmpty()) {
         return;
     }
 
@@ -1165,12 +1565,24 @@ void MainWindow::go_to_offset() {
         return;
     }
 
+    if (goto_offset_edit_ != nullptr) {
+        goto_offset_edit_->setCurrentText(text);
+    }
+    add_goto_offset_history(text);
     hex_view_->go_to_offset(static_cast<qint64>(offset));
     statusBar()->showMessage(QStringLiteral("Moved to offset 0x%1").arg(offset, 0, 16), 3000);
 }
 
 void MainWindow::set_bytes_per_row(int bytes_per_row) {
     hex_view_->set_bytes_per_row(bytes_per_row);
+    if (row_width_group_ != nullptr) {
+        for (QAction* action : row_width_group_->actions()) {
+            if (action != nullptr && action->data().toInt() == bytes_per_row) {
+                action->setChecked(true);
+                break;
+            }
+        }
+    }
     statusBar()->showMessage(QStringLiteral("Bytes per row set to %1").arg(bytes_per_row), 3000);
 }
 
@@ -1351,6 +1763,80 @@ void MainWindow::set_inspector_big_endian() {
     }
 }
 
+void MainWindow::set_bookmark_gutter_visible(bool visible) {
+    if (hex_view_ != nullptr) {
+        hex_view_->set_bookmark_gutter_visible(visible);
+    }
+}
+
+void MainWindow::set_row_numbers_visible(bool visible) {
+    if (hex_view_ != nullptr) {
+        hex_view_->set_row_numbers_visible(visible);
+    }
+}
+
+void MainWindow::set_offsets_visible(bool visible) {
+    if (hex_view_ != nullptr) {
+        hex_view_->set_offsets_visible(visible);
+    }
+}
+
+void MainWindow::increase_bytes_per_row() {
+    if (hex_view_ == nullptr) {
+        return;
+    }
+    const QList<int> widths = {8, 16, 24, 32, 48};
+    const int current = static_cast<int>(hex_view_->bytes_per_row());
+    for (const int width : widths) {
+        if (width > current) {
+            set_bytes_per_row(width);
+            return;
+        }
+    }
+}
+
+void MainWindow::decrease_bytes_per_row() {
+    if (hex_view_ == nullptr) {
+        return;
+    }
+    const QList<int> widths = {8, 16, 24, 32, 48};
+    const int current = static_cast<int>(hex_view_->bytes_per_row());
+    for (auto it = widths.crbegin(); it != widths.crend(); ++it) {
+        if (*it < current) {
+            set_bytes_per_row(*it);
+            return;
+        }
+    }
+}
+
+void MainWindow::reset_view() {
+    if (hex_view_ == nullptr) {
+        return;
+    }
+
+    hex_view_->reset_view_layout();
+    if (bookmarks_dock_ != nullptr) {
+        bookmarks_dock_->hide();
+    }
+    if (show_bookmark_gutter_action_ != nullptr) {
+        show_bookmark_gutter_action_->setChecked(true);
+    } else {
+        hex_view_->set_bookmark_gutter_visible(true);
+    }
+    if (show_row_numbers_action_ != nullptr) {
+        show_row_numbers_action_->setChecked(false);
+    } else {
+        hex_view_->set_row_numbers_visible(false);
+    }
+    if (show_offsets_action_ != nullptr) {
+        show_offsets_action_->setChecked(true);
+    } else {
+        hex_view_->set_offsets_visible(true);
+    }
+    set_bytes_per_row(16);
+    statusBar()->showMessage(QStringLiteral("View reset to defaults."), 2500);
+}
+
 void MainWindow::update_status(qulonglong caret_offset, qulonglong selection_size, qulonglong document_size) {
     const bool dirty = hex_view_ && hex_view_->is_dirty();
     const bool read_only = hex_view_ && hex_view_->is_read_only();
@@ -1390,6 +1876,7 @@ void MainWindow::update_inspector_view(const QString& text) {
         return;
     }
 
+    updating_inspector_tree_ = true;
     inspector_tree_->clear();
     if (hex_view_ != nullptr) {
         QString current_section;
@@ -1404,7 +1891,17 @@ void MainWindow::update_inspector_view(const QString& text) {
             }
 
             if (current_group != nullptr) {
-                new QTreeWidgetItem(current_group, QStringList{row.field, row.value});
+                auto* item = new QTreeWidgetItem(current_group, QStringList{row.field, row.value});
+                item->setData(0, Qt::UserRole, row.section);
+                item->setData(1, Qt::UserRole, row.field);
+                const bool editable =
+                    (row.section == QStringLiteral("Overview") && (row.field == QStringLiteral("Bytes") || row.field == QStringLiteral("ASCII"))) ||
+                    row.section == QStringLiteral("Integers") ||
+                    (row.section == QStringLiteral("Network") && row.field == QStringLiteral("IPv4")) ||
+                    row.section == QStringLiteral("Floating Point");
+                if (editable) {
+                    item->setFlags(item->flags() | Qt::ItemIsEditable);
+                }
             }
         }
     }
@@ -1415,6 +1912,87 @@ void MainWindow::update_inspector_view(const QString& text) {
     }
 
     inspector_tree_->expandAll();
+    updating_inspector_tree_ = false;
+}
+
+void MainWindow::update_analysis_view(bool selection_only) {
+    if (analysis_tree_ == nullptr) {
+        return;
+    }
+
+    analysis_tree_->clear();
+    if (hex_view_ == nullptr) {
+        return;
+    }
+
+    QString current_section;
+    QTreeWidgetItem* current_group = nullptr;
+    const QVector<HexView::AnalysisRow> rows = hex_view_->analysis_rows(selection_only);
+    for (const HexView::AnalysisRow& row : rows) {
+        if (row.section != current_section) {
+            current_section = row.section;
+            current_group = new QTreeWidgetItem(analysis_tree_, QStringList{current_section, QString()});
+            current_group->setFirstColumnSpanned(true);
+            current_group->setFlags(current_group->flags() & ~Qt::ItemIsSelectable);
+        }
+
+        if (current_group == nullptr) {
+            continue;
+        }
+
+        auto* item = new QTreeWidgetItem(current_group, QStringList{row.field, row.value});
+        item->setData(0, Qt::UserRole, row.section);
+        item->setData(1, Qt::UserRole, row.field);
+    }
+
+    analysis_tree_->expandAll();
+}
+
+void MainWindow::handle_inspector_item_changed(QTreeWidgetItem* item, int column) {
+    if (updating_inspector_tree_ || item == nullptr || column != 1 || hex_view_ == nullptr) {
+        return;
+    }
+
+    const QString section = item->data(0, Qt::UserRole).toString();
+    const QString field = item->data(1, Qt::UserRole).toString();
+    if (section.isEmpty() || field.isEmpty()) {
+        return;
+    }
+
+    QString error_message;
+    if (!hex_view_->apply_inspector_edit(section, field, item->text(1), &error_message)) {
+        statusBar()->showMessage(error_message.isEmpty() ? QStringLiteral("Inspector edit failed.") : error_message, 4000);
+        update_inspector_view(QString());
+        return;
+    }
+
+    statusBar()->showMessage(QStringLiteral("Updated %1.").arg(field), 2500);
+}
+
+void MainWindow::copy_current_tree_value(QTreeWidget* tree) {
+    if (tree == nullptr) {
+        return;
+    }
+
+    QTreeWidgetItem* item = tree->currentItem();
+    if (item == nullptr && !tree->selectedItems().isEmpty()) {
+        item = tree->selectedItems().first();
+    }
+    if (item == nullptr) {
+        return;
+    }
+
+    QString value = item->text(1);
+    if (value.isEmpty()) {
+        const int current_column = tree->currentColumn();
+        value = item->text(current_column >= 0 ? current_column : 0);
+    }
+    if (value.isEmpty()) {
+        return;
+    }
+
+    QApplication::clipboard()->setText(value);
+    statusBar()->showMessage(QStringLiteral("Copied value to clipboard."), 2000);
 }
 
 void MainWindow::show_search_summary(const QString& summary) {

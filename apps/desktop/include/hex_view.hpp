@@ -31,6 +31,12 @@ public:
         QString value;
     };
 
+    struct AnalysisRow {
+        QString section;
+        QString field;
+        QString value;
+    };
+
     explicit HexView(QWidget* parent = nullptr);
 
     bool open_file(const QString& path);
@@ -45,6 +51,18 @@ public:
     EditMode edit_mode() const;
     void set_edit_mode(EditMode mode);
     void toggle_edit_mode();
+    ActivePane active_pane() const;
+    bool bookmark_gutter_visible() const;
+    void set_bookmark_gutter_visible(bool visible);
+    bool row_numbers_visible() const;
+    void set_row_numbers_visible(bool visible);
+    bool offsets_visible() const;
+    void set_offsets_visible(bool visible);
+    int row_number_column_width() const;
+    void set_row_number_column_width(int width);
+    int offset_column_width() const;
+    void set_offset_column_width(int width);
+    void reset_view_layout();
     bool is_read_only() const;
     bool is_dirty() const;
     bool save();
@@ -55,6 +73,7 @@ public:
     QByteArray selected_bytes() const;
     QByteArray read_bytes(qint64 offset, qint64 length) const;
     QString selected_hex_text() const;
+    QString selected_text_text() const;
     bool insert_at_caret(const QByteArray& bytes);
     bool delete_selection();
     bool delete_at_caret();
@@ -70,11 +89,13 @@ public:
     QVector<qint64> find_all_patterns(const QByteArray& pattern, bool selection_only = false) const;
     QString format_search_result(qint64 found_offset, const QByteArray& pattern, bool hex_mode) const;
     QString build_hash_report(bool selection_only) const;
+    QVector<AnalysisRow> analysis_rows(bool selection_only) const;
     bool replace_range(qint64 offset, const QByteArray& before, const QByteArray& after);
     qint64 replace_all(const QByteArray& before, const QByteArray& after, bool selection_only);
     InspectorEndian inspector_endian() const;
     void set_inspector_endian(InspectorEndian endian);
     QVector<InspectorRow> inspector_rows() const;
+    bool apply_inspector_edit(const QString& section, const QString& field, const QString& value, QString* error_message = nullptr);
 
 signals:
     void status_changed(qulonglong caret_offset, qulonglong selection_size, qulonglong document_size);
@@ -88,6 +109,7 @@ protected:
     void keyPressEvent(QKeyEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
 
 private:
@@ -116,10 +138,18 @@ private:
         QString ascii_text;
     };
 
+    enum class HeaderDivider {
+        None,
+        RowOffset,
+        OffsetHex,
+        HexText,
+    };
+
     void refresh_metrics();
     void refresh_scrollbar();
     void invalidate_row_cache();
     void ensure_row_cache(qint64 first_row, qint64 row_count);
+    qint64 max_first_visible_row() const;
     void emit_status();
     void emit_bookmarks();
     void emit_inspector();
@@ -129,6 +159,7 @@ private:
     void ensure_caret_visible();
     void scroll_to_row(qint64 row);
     qint64 visible_row_count() const;
+    qint64 fully_visible_row_count() const;
     qint64 total_rows() const;
     qint64 first_visible_row() const;
     qint64 last_visible_row() const;
@@ -140,6 +171,8 @@ private:
     qint64 selection_end() const;
     qint64 selection_size() const;
     void clear_selection();
+    HeaderDivider divider_at(const QPoint& point) const;
+    void update_resize_cursor(const QPoint& point);
     QRect header_cell_rect(qint64 column) const;
     QRect hex_cell_rect(int row_index, qint64 column) const;
     QRect ascii_cell_rect(int row_index, qint64 column) const;
@@ -148,11 +181,14 @@ private:
     qint64 offset_at(const QPoint& point) const;
     ActivePane pane_at(const QPoint& point) const;
     QString hex_byte(quint8 value) const;
+    QString formatted_offset(qint64 offset) const;
     QChar printable_char(quint8 value) const;
     bool has_bookmark(qint64 offset) const;
     QString format_bookmarks_text() const;
     QVector<InspectorRow> build_inspector_rows() const;
     QString format_inspector_text() const;
+    QVector<AnalysisRow> build_analysis_rows(bool selection_only) const;
+    static bool try_parse_hex_string(const QString& text, QByteArray& bytes);
     qint64 search_from(const QByteArray& pattern, qint64 start_offset, bool forward, qint64 range_start = -1, qint64 range_end = -1) const;
     void leaveEvent(QEvent* event) override;
 
@@ -175,4 +211,10 @@ private:
     ActivePane active_pane_ = ActivePane::Hex;
     qint8 pending_insert_high_nibble_ = -1;
     InspectorEndian inspector_endian_ = InspectorEndian::Little;
+    bool show_bookmark_gutter_ = true;
+    bool show_row_numbers_ = false;
+    bool show_offsets_ = true;
+    int custom_row_number_width_ = -1;
+    int custom_address_width_ = -1;
+    HeaderDivider active_divider_ = HeaderDivider::None;
 };

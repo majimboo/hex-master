@@ -4,6 +4,10 @@
 
 #include <QFileInfo>
 
+namespace {
+constexpr qint64 kReadCacheWindow = 256 * 1024;
+}
+
 FileByteSource::~FileByteSource() {
     close();
 }
@@ -66,7 +70,10 @@ QByteArray FileByteSource::read_range(qint64 offset, qint64 length) const {
         return cached_bytes_.mid(start, bounded_length);
     }
 
-    const qint64 cache_window = qMax<qint64>(bounded_length, 256 * 1024);
+    // Fill a larger local cache for sequential reads, but never ask the backend
+    // for bytes beyond the actual end of the document.
+    const qint64 remaining = file_size - offset;
+    const qint64 cache_window = qMin<qint64>(remaining, qMax<qint64>(bounded_length, kReadCacheWindow));
     cached_bytes_.resize(static_cast<int>(cache_window));
     const std::size_t bytes_read = hm_file_document_read(
         handle_,

@@ -15,11 +15,14 @@ It is designed as a modern desktop alternative to Hex Workshop for inspecting an
 - hex-side and text-side editing
 - insert and overwrite modes
 - structural insert, delete, cut, and paste behavior
-- typed inspector views for integer, floating-point, and time interpretations
+- typed inspector views for integer, floating-point, time, and IPv4 interpretations
+- inline inspector editing for writable value types
+- analysis dock with grouped checksum and digest tables
 - byte-pattern, text, and typed-value search
 - unified replace workflow for replace-next and replace-all
 - search results table with match navigation
 - bookmarks, checksums, recent files, and session restore
+- configurable viewport layout with persisted gutters, offsets, row numbers, and bytes-per-row
 
 ## Download
 

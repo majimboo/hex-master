@@ -27,6 +27,7 @@ The desktop app lives in `apps/desktop` and is built around a custom `HexView` w
 Current desktop responsibilities:
 
 - viewport layout and painting
+- draggable header dividers for viewport sizing
 - offset-to-cell hit testing
 - synchronized hex and text panes
 - caret and selection rendering
@@ -82,6 +83,7 @@ Current analysis features:
 - MD5
 - SHA-1
 - SHA-256
+- grouped table presentation with copyable values
 
 Current limitation:
 
@@ -99,6 +101,26 @@ Still missing:
 
 - crash recovery and autosave
 - broader release-grade fault-injection and stress testing
+
+## View Customization
+
+The custom `HexView` now persists a small amount of layout state beyond the main window geometry.
+
+Current persisted view state includes:
+
+- bookmark gutter visibility
+- row number visibility
+- offset visibility
+- bytes per row
+- manually resized row/offset gutter widths
+
+`Reset View` restores the intended defaults for the public 1.0 line:
+
+- bookmark gutter shown
+- row numbers hidden
+- offsets shown
+- bytes per row set to 16
+- bookmarks dock hidden
 
 ## Versioning and Release Metadata
 

@@ -38,10 +38,13 @@ This file tracks the public-release baseline rather than the original scaffold M
 - [x] Floats
 - [x] Endianness switch
 - [x] Timestamps
+- [x] IPv4 interpretation
+- [x] Inline inspector editing
 - [x] CRC32
 - [x] MD5
 - [x] SHA-1
 - [x] SHA-256
+- [x] Copyable analysis values
 
 ## Desktop UX
 
@@ -50,6 +53,8 @@ This file tracks the public-release baseline rather than the original scaffold M
 - [x] Session restore
 - [x] Status bar
 - [x] Dock layout persistence
+- [x] Resettable view layout
+- [x] Persisted viewport customization
 - [x] Keyboard shortcuts
 - [x] About dialog
 - [x] Embedded app icon

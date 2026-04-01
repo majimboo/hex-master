@@ -21,6 +21,7 @@ add_custom_target(hex_master_rust_ffi
     COMMAND "${CARGO_EXECUTABLE}" build --package hexapp-ffi "$<$<NOT:$<CONFIG:Debug>>:--release>"
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}/../.."
     COMMENT "Building Rust FFI bridge"
+    COMMAND_EXPAND_LISTS
     VERBATIM
 )
 
