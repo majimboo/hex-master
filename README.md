@@ -35,7 +35,7 @@ When a tagged release is published, the Windows package will be available as:
 
 - `HexMaster-windows-x64-vX.Y.Z.zip`
 
-The packaged executable name remains stable:
+After extracting that archive, run:
 
 - `HexMaster.exe`
 
