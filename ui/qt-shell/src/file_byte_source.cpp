@@ -114,13 +114,64 @@ bool FileByteSource::overwrite_range(qint64 offset, const QByteArray& bytes) {
         return false;
     }
 
-    for (int index = 0; index < bytes.size(); ++index) {
-        if (!overwrite_byte(offset + index, static_cast<quint8>(bytes.at(index)))) {
-            return false;
+    const bool written = hm_file_document_overwrite_range(
+        handle_,
+        static_cast<std::uint64_t>(offset),
+        reinterpret_cast<const std::uint8_t*>(bytes.constData()),
+        static_cast<std::size_t>(bytes.size()));
+    if (!written) {
+        return false;
+    }
+
+    if (cached_offset_ >= 0) {
+        const qint64 cache_end = cached_offset_ + cached_bytes_.size();
+        const qint64 write_end = offset + bytes.size();
+        if (offset < cache_end && write_end > cached_offset_) {
+            const qint64 overlap_start = qMax(offset, cached_offset_);
+            const qint64 overlap_end = qMin(write_end, cache_end);
+            for (qint64 current = overlap_start; current < overlap_end; ++current) {
+                cached_bytes_[static_cast<int>(current - cached_offset_)] =
+                    bytes.at(static_cast<int>(current - offset));
+            }
         }
     }
 
     return true;
+}
+
+bool FileByteSource::insert_range(qint64 offset, const QByteArray& bytes) {
+    if (handle_ == nullptr || offset < 0 || bytes.isEmpty()) {
+        return false;
+    }
+
+    const bool inserted = hm_file_document_insert_range(
+        handle_,
+        static_cast<std::uint64_t>(offset),
+        reinterpret_cast<const std::uint8_t*>(bytes.constData()),
+        static_cast<std::size_t>(bytes.size()));
+    if (inserted) {
+        clear_cache();
+    }
+    return inserted;
+}
+
+bool FileByteSource::delete_range(qint64 offset, qint64 length) {
+    if (handle_ == nullptr || offset < 0 || length <= 0) {
+        return false;
+    }
+
+    const bool deleted = hm_file_document_delete_range(
+        handle_,
+        static_cast<std::uint64_t>(offset),
+        static_cast<std::size_t>(length));
+    if (deleted) {
+        clear_cache();
+    }
+    return deleted;
+}
+
+bool FileByteSource::is_read_only() const {
+    return handle_ != nullptr && hm_file_document_is_read_only(handle_);
 }
 
 bool FileByteSource::is_dirty() const {

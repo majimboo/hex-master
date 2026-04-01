@@ -24,6 +24,9 @@ public:
     bool read_byte(qint64 offset, quint8& value) const;
     bool overwrite_byte(qint64 offset, quint8 value);
     bool overwrite_range(qint64 offset, const QByteArray& bytes);
+    bool insert_range(qint64 offset, const QByteArray& bytes);
+    bool delete_range(qint64 offset, qint64 length);
+    bool is_read_only() const;
     bool is_dirty() const;
     bool save();
     bool save_as(const QString& path);

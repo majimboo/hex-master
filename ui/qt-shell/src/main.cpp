@@ -1,6 +1,7 @@
 #include <QApplication>
 #include <QColor>
 #include <QFont>
+#include <QIcon>
 #include <QPalette>
 #include <QStyleFactory>
 
@@ -10,6 +11,7 @@ int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
     app.setApplicationName("Hex Master");
     app.setOrganizationName("Hex Master");
+    app.setWindowIcon(QIcon(QStringLiteral(":/appicon.png")));
     app.setStyle(QStyleFactory::create("Fusion"));
 
     QPalette palette;
@@ -52,6 +54,7 @@ int main(int argc, char* argv[]) {
     );
 
     MainWindow window;
+    window.setWindowIcon(QIcon(QStringLiteral(":/appicon.png")));
     window.resize(1440, 900);
     window.show();
 

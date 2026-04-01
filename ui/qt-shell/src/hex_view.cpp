@@ -1,6 +1,8 @@
 #include "hex_view.hpp"
 
 #include <QFontDatabase>
+#include <QDateTime>
+#include <QCryptographicHash>
 #include <QEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -8,10 +10,34 @@
 #include <QScrollBar>
 #include <QWheelEvent>
 #include <QtMath>
+#include <array>
 #include <algorithm>
+#include <cstring>
 
 namespace {
 constexpr int kScrollbarResolution = 1000000;
+
+quint32 crc32_update(quint32 crc, const QByteArray& bytes) {
+    static quint32 table[256];
+    static bool initialized = false;
+    if (!initialized) {
+        for (quint32 i = 0; i < 256; ++i) {
+            quint32 value = i;
+            for (int bit = 0; bit < 8; ++bit) {
+                value = (value & 1U) ? (0xEDB88320U ^ (value >> 1U)) : (value >> 1U);
+            }
+            table[i] = value;
+        }
+        initialized = true;
+    }
+
+    quint32 next = crc;
+    for (const char byte : bytes) {
+        const auto index = static_cast<quint8>((next ^ static_cast<quint8>(byte)) & 0xFFU);
+        next = table[index] ^ (next >> 8U);
+    }
+    return next;
+}
 }
 
 HexView::HexView(QWidget* parent) : QAbstractScrollArea(parent) {
@@ -41,6 +67,7 @@ bool HexView::open_file(const QString& path) {
     selection_anchor_ = -1;
     selection_active_ = false;
     high_nibble_pending_ = true;
+    active_pane_ = ActivePane::Hex;
     bookmarks_.clear();
     ++render_generation_;
     invalidate_row_cache();
@@ -123,6 +150,160 @@ bool HexView::redo() {
     return redone;
 }
 
+bool HexView::has_selection() const {
+    return selection_active_ && selection_anchor_ >= 0 && selection_size() > 0;
+}
+
+QByteArray HexView::selected_bytes() const {
+    if (!has_selection()) {
+        return {};
+    }
+
+    return source_.read_range(selection_start(), selection_size());
+}
+
+QString HexView::selected_hex_text() const {
+    const QByteArray bytes = selected_bytes();
+    return bytes.isEmpty() ? QString() : QString::fromLatin1(bytes.toHex(' ').toUpper());
+}
+
+bool HexView::insert_at_caret(const QByteArray& bytes) {
+    if (!has_document() || is_read_only() || bytes.isEmpty()) {
+        return false;
+    }
+
+    qint64 start = caret_offset_;
+    if (has_selection()) {
+        start = selection_start();
+        if (!source_.delete_range(start, selection_size())) {
+            return false;
+        }
+        caret_offset_ = start;
+        selection_anchor_ = -1;
+        selection_active_ = false;
+    }
+
+    if (!source_.insert_range(start, bytes)) {
+        return false;
+    }
+
+    selection_anchor_ = start;
+    selection_active_ = bytes.size() > 1;
+    caret_offset_ = start + qMax(0, bytes.size() - 1);
+    high_nibble_pending_ = true;
+    pending_insert_high_nibble_ = -1;
+    refresh_after_edit();
+    return true;
+}
+
+bool HexView::delete_selection() {
+    if (!has_document() || is_read_only() || !has_selection()) {
+        return false;
+    }
+
+    const qint64 start = selection_start();
+    const qint64 length = selection_size();
+    if (!source_.delete_range(start, length)) {
+        return false;
+    }
+
+    selection_anchor_ = -1;
+    selection_active_ = false;
+    caret_offset_ = qMin(start, qMax<qint64>(0, document_size() - 1));
+    high_nibble_pending_ = true;
+    pending_insert_high_nibble_ = -1;
+    refresh_after_edit();
+    return true;
+}
+
+bool HexView::delete_at_caret() {
+    if (!has_document() || is_read_only() || document_size() <= 0) {
+        return false;
+    }
+
+    if (has_selection()) {
+        return delete_selection();
+    }
+
+    if (!source_.delete_range(caret_offset_, 1)) {
+        return false;
+    }
+
+    selection_anchor_ = -1;
+    selection_active_ = false;
+    caret_offset_ = qMin(caret_offset_, qMax<qint64>(0, document_size() - 1));
+    high_nibble_pending_ = true;
+    pending_insert_high_nibble_ = -1;
+    refresh_after_edit();
+    return true;
+}
+
+bool HexView::backspace_at_caret() {
+    if (!has_document() || is_read_only() || document_size() <= 0) {
+        return false;
+    }
+
+    if (has_selection()) {
+        return delete_selection();
+    }
+
+    if (caret_offset_ <= 0) {
+        return false;
+    }
+
+    const qint64 delete_offset = caret_offset_ - 1;
+    if (!source_.delete_range(delete_offset, 1)) {
+        return false;
+    }
+
+    selection_anchor_ = -1;
+    selection_active_ = false;
+    caret_offset_ = delete_offset;
+    high_nibble_pending_ = true;
+    pending_insert_high_nibble_ = -1;
+    refresh_after_edit();
+    return true;
+}
+
+bool HexView::overwrite_at_caret(const QByteArray& bytes) {
+    if (!has_document() || is_read_only() || bytes.isEmpty()) {
+        return false;
+    }
+
+    const qint64 start = has_selection() ? selection_start() : caret_offset_;
+    if (start < 0 || start + bytes.size() > document_size()) {
+        return false;
+    }
+
+    if (!source_.overwrite_range(start, bytes)) {
+        return false;
+    }
+
+    selection_anchor_ = start;
+    selection_active_ = bytes.size() > 1;
+    caret_offset_ = start + qMax(0, bytes.size() - 1);
+    high_nibble_pending_ = true;
+    pending_insert_high_nibble_ = -1;
+    refresh_after_edit();
+    return true;
+}
+
+bool HexView::overwrite_selection(const QByteArray& bytes) {
+    if (!has_selection() || bytes.isEmpty() || bytes.size() != selection_size()) {
+        return false;
+    }
+
+    return overwrite_at_caret(bytes);
+}
+
+bool HexView::fill_selection(quint8 value) {
+    if (!has_selection() || is_read_only()) {
+        return false;
+    }
+
+    return overwrite_selection(QByteArray(static_cast<int>(selection_size()), static_cast<char>(value)));
+}
+
 bool HexView::find_pattern(const QByteArray& pattern, bool forward, bool from_caret, qint64* found_offset) {
     if (!has_document() || pattern.isEmpty()) {
         return false;
@@ -135,9 +316,9 @@ bool HexView::find_pattern(const QByteArray& pattern, bool forward, bool from_ca
         start_offset = forward ? 0 : document_size() - 1;
     }
 
-    qint64 match = search_from(pattern, start_offset, forward);
+    qint64 match = search_from(pattern, start_offset, forward, 0, document_size());
     if (match < 0 && from_caret) {
-        match = search_from(pattern, forward ? 0 : document_size() - 1, forward);
+        match = search_from(pattern, forward ? 0 : document_size() - 1, forward, 0, document_size());
     }
     if (match < 0) {
         return false;
@@ -155,6 +336,72 @@ bool HexView::find_pattern(const QByteArray& pattern, bool forward, bool from_ca
     emit_status();
     viewport()->update();
     return true;
+}
+
+bool HexView::find_pattern_in_selection(const QByteArray& pattern, bool forward, bool from_caret, qint64* found_offset) {
+    if (!has_document() || pattern.isEmpty() || !has_selection()) {
+        return false;
+    }
+
+    const qint64 range_start = selection_start();
+    const qint64 range_end = selection_end();
+    if (pattern.size() > range_end - range_start) {
+        return false;
+    }
+
+    qint64 start_offset = forward ? range_start : range_end - 1;
+    if (from_caret) {
+        start_offset = forward
+            ? qBound(range_start, caret_offset_ + 1, range_end)
+            : qBound(range_start, caret_offset_ - 1, range_end - 1);
+    }
+
+    qint64 match = search_from(pattern, start_offset, forward, range_start, range_end);
+    if (match < 0 && from_caret) {
+        match = search_from(pattern, forward ? range_start : range_end - 1, forward, range_start, range_end);
+    }
+    if (match < 0) {
+        return false;
+    }
+
+    if (found_offset != nullptr) {
+        *found_offset = match;
+    }
+
+    selection_anchor_ = match;
+    selection_active_ = pattern.size() > 1;
+    caret_offset_ = match + qMax(0, pattern.size() - 1);
+    high_nibble_pending_ = true;
+    ensure_caret_visible();
+    emit_status();
+    viewport()->update();
+    return true;
+}
+
+QVector<qint64> HexView::find_all_patterns(const QByteArray& pattern, bool selection_only) const {
+    QVector<qint64> matches;
+    if (!has_document() || pattern.isEmpty()) {
+        return matches;
+    }
+
+    const qint64 range_start = selection_only && has_selection() ? selection_start() : 0;
+    const qint64 range_end = selection_only && has_selection() ? selection_end() : document_size();
+    if (range_end - range_start < pattern.size()) {
+        return matches;
+    }
+
+    qint64 cursor = range_start;
+    while (cursor <= range_end - pattern.size()) {
+        const qint64 found = search_from(pattern, cursor, true, range_start, range_end);
+        if (found < 0) {
+            break;
+        }
+
+        matches.push_back(found);
+        cursor = found + 1;
+    }
+
+    return matches;
 }
 
 QString HexView::format_search_result(qint64 found_offset, const QByteArray& pattern, bool hex_mode) const {
@@ -178,8 +425,58 @@ QString HexView::format_search_result(qint64 found_offset, const QByteArray& pat
         .arg(preview_text);
 }
 
+QString HexView::build_hash_report(bool selection_only) const {
+    if (!has_document()) {
+        return QStringLiteral("Analysis\n\nOpen a file to compute hashes.");
+    }
+
+    const qint64 range_start = selection_only && has_selection() ? selection_start() : 0;
+    const qint64 range_len = selection_only && has_selection() ? selection_size() : document_size();
+    if (range_len <= 0) {
+        return QStringLiteral("Analysis\n\nNo bytes available for hashing.");
+    }
+
+    constexpr qint64 kChunkSize = 1024 * 1024;
+    QCryptographicHash md5(QCryptographicHash::Md5);
+    QCryptographicHash sha1(QCryptographicHash::Sha1);
+    QCryptographicHash sha256(QCryptographicHash::Sha256);
+    quint32 crc = 0xFFFFFFFFU;
+
+    for (qint64 offset = range_start; offset < range_start + range_len;) {
+        const qint64 to_read = qMin(kChunkSize, range_start + range_len - offset);
+        const QByteArray chunk = source_.read_range(offset, to_read);
+        if (chunk.isEmpty()) {
+            break;
+        }
+
+        md5.addData(chunk);
+        sha1.addData(chunk);
+        sha256.addData(chunk);
+        crc = crc32_update(crc, chunk);
+        offset += chunk.size();
+    }
+
+    QString text = QStringLiteral("Analysis\n\n");
+    text += QStringLiteral("Range: 0x%1 - 0x%2\n")
+                .arg(range_start, 8, 16, QChar(u'0'))
+                .arg(range_start + range_len - 1, 8, 16, QChar(u'0'))
+                .toUpper();
+    text += QStringLiteral("Length: %1 bytes\n").arg(range_len);
+    text += QStringLiteral("CRC32:  %1\n").arg(QStringLiteral("%1").arg(~crc, 8, 16, QChar(u'0')).toUpper());
+    text += QStringLiteral("MD5:    %1\n").arg(QString::fromLatin1(md5.result().toHex()).toUpper());
+    text += QStringLiteral("SHA-1:  %1\n").arg(QString::fromLatin1(sha1.result().toHex()).toUpper());
+    text += QStringLiteral("SHA-256:%1%2")
+                .arg(QChar(u' '))
+                .arg(QString::fromLatin1(sha256.result().toHex()).toUpper());
+    return text;
+}
+
 bool HexView::replace_range(qint64 offset, const QByteArray& before, const QByteArray& after) {
-    if (!has_document() || before.isEmpty() || before.size() != after.size()) {
+    if (!has_document() || is_read_only() || before.isEmpty()) {
+        return false;
+    }
+
+    if (edit_mode_ == EditMode::Overwrite && before.size() != after.size()) {
         return false;
     }
 
@@ -187,20 +484,90 @@ bool HexView::replace_range(qint64 offset, const QByteArray& before, const QByte
     if (current != before) {
         return false;
     }
-    if (!source_.overwrite_range(offset, after)) {
-        return false;
+
+    if (before.size() == after.size()) {
+        if (!source_.overwrite_range(offset, after)) {
+            return false;
+        }
+    } else {
+        if (!source_.delete_range(offset, before.size())) {
+            return false;
+        }
+        if (!after.isEmpty() && !source_.insert_range(offset, after)) {
+            return false;
+        }
     }
 
     selection_anchor_ = offset;
     selection_active_ = after.size() > 1;
     caret_offset_ = offset + qMax(0, after.size() - 1);
     high_nibble_pending_ = true;
-    ++render_generation_;
-    invalidate_row_cache();
-    ensure_caret_visible();
-    emit_status();
-    viewport()->update();
+    pending_insert_high_nibble_ = -1;
+    refresh_after_edit();
     return true;
+}
+
+qint64 HexView::replace_all(const QByteArray& before, const QByteArray& after, bool selection_only) {
+    if (!has_document() || is_read_only() || before.isEmpty()) {
+        return 0;
+    }
+
+    if (edit_mode_ == EditMode::Overwrite && before.size() != after.size()) {
+        return 0;
+    }
+
+    const qint64 range_start = selection_only && has_selection() ? selection_start() : 0;
+    qint64 range_end = selection_only && has_selection() ? selection_end() : document_size();
+    if (range_end - range_start < before.size()) {
+        return 0;
+    }
+
+    qint64 replacements = 0;
+    qint64 cursor = range_start;
+    qint64 last_replaced = -1;
+    while (cursor <= range_end - before.size()) {
+        const qint64 found = search_from(before, cursor, true, range_start, range_end);
+        if (found < 0) {
+            break;
+        }
+
+        if (!replace_range(found, before, after)) {
+            break;
+        }
+
+        ++replacements;
+        last_replaced = found;
+        cursor = found + after.size();
+        range_end += after.size() - before.size();
+    }
+
+    if (replacements > 0) {
+        selection_anchor_ = last_replaced;
+        selection_active_ = after.size() > 1;
+        caret_offset_ = last_replaced + qMax(0, after.size() - 1);
+        high_nibble_pending_ = true;
+        pending_insert_high_nibble_ = -1;
+        refresh_after_edit();
+    }
+
+    return replacements;
+}
+
+HexView::InspectorEndian HexView::inspector_endian() const {
+    return inspector_endian_;
+}
+
+void HexView::set_inspector_endian(InspectorEndian endian) {
+    if (inspector_endian_ == endian) {
+        return;
+    }
+
+    inspector_endian_ = endian;
+    emit_inspector();
+}
+
+QVector<HexView::InspectorRow> HexView::inspector_rows() const {
+    return build_inspector_rows();
 }
 
 void HexView::toggle_bookmark_at_caret() {
@@ -276,6 +643,29 @@ void HexView::go_to_offset(qint64 offset) {
 
     clear_selection();
     move_caret(offset, false);
+}
+
+HexView::EditMode HexView::edit_mode() const {
+    return edit_mode_;
+}
+
+void HexView::set_edit_mode(EditMode mode) {
+    if (edit_mode_ == mode) {
+        return;
+    }
+
+    edit_mode_ = mode;
+    pending_insert_high_nibble_ = -1;
+    high_nibble_pending_ = true;
+    emit_status();
+}
+
+void HexView::toggle_edit_mode() {
+    set_edit_mode(edit_mode_ == EditMode::Insert ? EditMode::Overwrite : EditMode::Insert);
+}
+
+bool HexView::is_read_only() const {
+    return source_.is_read_only();
 }
 
 void HexView::paintEvent(QPaintEvent* event) {
@@ -404,12 +794,19 @@ void HexView::keyPressEvent(QKeyEvent* event) {
         return;
     }
 
-    if (!event->modifiers().testFlag(Qt::ControlModifier) &&
+    if (!is_read_only() &&
+        !event->modifiers().testFlag(Qt::ControlModifier) &&
         !event->modifiers().testFlag(Qt::AltModifier) &&
         !event->modifiers().testFlag(Qt::MetaModifier)) {
-        const int nibble_value = hex_value_for_key(event->key());
-        if (nibble_value >= 0 && apply_hex_input(nibble_value)) {
-            return;
+        if (active_pane_ == ActivePane::Text) {
+            if (apply_text_input(event->text())) {
+                return;
+            }
+        } else {
+            const int nibble_value = hex_value_for_key(event->key());
+            if (nibble_value >= 0 && apply_hex_input(nibble_value)) {
+                return;
+            }
         }
     }
 
@@ -440,10 +837,35 @@ void HexView::keyPressEvent(QKeyEvent* event) {
     case Qt::Key_End:
         move_caret(document_size() - 1, extend_selection);
         return;
+    case Qt::Key_Insert:
+        toggle_edit_mode();
+        return;
+    case Qt::Key_Delete:
+        if (has_selection()) {
+            delete_selection();
+            return;
+        }
+        if (edit_mode_ == EditMode::Insert) {
+            delete_at_caret();
+            return;
+        }
+        break;
+    case Qt::Key_Backspace:
+        if (has_selection()) {
+            delete_selection();
+            return;
+        }
+        if (edit_mode_ == EditMode::Insert) {
+            backspace_at_caret();
+            return;
+        }
+        break;
     default:
         QAbstractScrollArea::keyPressEvent(event);
         return;
     }
+
+    QAbstractScrollArea::keyPressEvent(event);
 }
 
 void HexView::mousePressEvent(QMouseEvent* event) {
@@ -452,6 +874,7 @@ void HexView::mousePressEvent(QMouseEvent* event) {
         return;
     }
 
+    active_pane_ = pane_at(event->pos());
     const qint64 clicked = offset_at(event->pos());
     selection_anchor_ = clicked;
     selection_active_ = false;
@@ -587,6 +1010,16 @@ void HexView::emit_inspector() {
     emit inspector_changed(format_inspector_text());
 }
 
+void HexView::refresh_after_edit(bool ensure_visible) {
+    ++render_generation_;
+    invalidate_row_cache();
+    if (ensure_visible) {
+        ensure_caret_visible();
+    }
+    emit_status();
+    viewport()->update();
+}
+
 void HexView::move_caret(qint64 offset, bool extend_selection) {
     if (!has_document()) {
         return;
@@ -597,6 +1030,7 @@ void HexView::move_caret(qint64 offset, bool extend_selection) {
         selection_anchor_ = clamped;
         selection_active_ = false;
         high_nibble_pending_ = true;
+        pending_insert_high_nibble_ = -1;
     } else {
         selection_active_ = selection_anchor_ != clamped;
     }
@@ -757,6 +1191,23 @@ int HexView::hex_value_for_key(int key) const {
 }
 
 bool HexView::apply_hex_input(int nibble_value) {
+    if (is_read_only()) {
+        return false;
+    }
+
+    if (edit_mode_ == EditMode::Insert) {
+        if (pending_insert_high_nibble_ < 0) {
+            pending_insert_high_nibble_ = static_cast<qint8>(nibble_value);
+            emit_status();
+            viewport()->update();
+            return true;
+        }
+
+        const quint8 byte = static_cast<quint8>((pending_insert_high_nibble_ << 4) | nibble_value);
+        pending_insert_high_nibble_ = -1;
+        return insert_at_caret(QByteArray(1, static_cast<char>(byte)));
+    }
+
     quint8 current = 0;
     if (!source_.read_byte(caret_offset_, current)) {
         return false;
@@ -788,6 +1239,74 @@ bool HexView::apply_hex_input(int nibble_value) {
     return true;
 }
 
+bool HexView::apply_text_input(const QString& text) {
+    if (is_read_only() || text.isEmpty()) {
+        return false;
+    }
+
+    QByteArray bytes;
+    bytes.reserve(text.size());
+    for (const QChar character : text) {
+        if (character.isNull() || character.isLowSurrogate() || character.isHighSurrogate()) {
+            continue;
+        }
+
+        const ushort codepoint = character.unicode();
+        if (codepoint < 32 || codepoint == 127) {
+            continue;
+        }
+
+        const char latin1 = character.toLatin1();
+        bytes.append(latin1 == '\0' && codepoint != 0 ? '?' : latin1);
+    }
+
+    if (bytes.isEmpty()) {
+        return false;
+    }
+
+    qint64 start = has_selection() ? selection_start() : caret_offset_;
+    if (edit_mode_ == EditMode::Insert) {
+        if (has_selection()) {
+            if (!source_.delete_range(start, selection_size())) {
+                return false;
+            }
+        }
+
+        if (!source_.insert_range(start, bytes)) {
+            return false;
+        }
+    } else {
+        if (has_selection()) {
+            const qint64 length = selection_size();
+            if (bytes.size() > length) {
+                bytes.truncate(static_cast<int>(length));
+            }
+            if (bytes.isEmpty()) {
+                return false;
+            }
+            if (!source_.overwrite_range(start, bytes)) {
+                return false;
+            }
+        } else {
+            if (start < 0 || start >= document_size()) {
+                return false;
+            }
+            if (!source_.overwrite_range(start, bytes.left(1))) {
+                return false;
+            }
+            bytes = bytes.left(1);
+        }
+    }
+
+    selection_anchor_ = -1;
+    selection_active_ = false;
+    pending_insert_high_nibble_ = -1;
+    high_nibble_pending_ = true;
+    caret_offset_ = qMin(start + static_cast<qint64>(bytes.size()), qMax<qint64>(0, document_size() - 1));
+    refresh_after_edit();
+    return true;
+}
+
 qint64 HexView::offset_at(const QPoint& point) const {
     if (!has_document()) {
         return 0;
@@ -805,6 +1324,14 @@ qint64 HexView::offset_at(const QPoint& point) const {
 
     column = qBound(0, column, static_cast<int>(bytes_per_row_ - 1));
     return clamp_offset(row_to_offset(row) + column);
+}
+
+HexView::ActivePane HexView::pane_at(const QPoint& point) const {
+    if (point.x() >= metrics_.ascii_start) {
+        return ActivePane::Text;
+    }
+
+    return ActivePane::Hex;
 }
 
 QString HexView::hex_byte(quint8 value) const {
@@ -848,77 +1375,181 @@ QString HexView::format_bookmarks_text() const {
     return text.toUpper();
 }
 
-QString HexView::format_inspector_text() const {
-    if (!has_document()) {
-        return QStringLiteral("Inspector\n\nOpen a file to inspect values.");
-    }
-
-    const QByteArray bytes = source_.read_range(caret_offset_, 8);
-    if (bytes.isEmpty()) {
-        return QStringLiteral("Inspector\n\nNo bytes available at the current offset.");
-    }
-
-    auto le_value = [&bytes](int count) -> quint64 {
-        quint64 value = 0;
-        for (int i = 0; i < count && i < bytes.size(); ++i) {
-            value |= static_cast<quint64>(static_cast<quint8>(bytes.at(i))) << (i * 8);
-        }
-        return value;
+QVector<HexView::InspectorRow> HexView::build_inspector_rows() const {
+    QVector<InspectorRow> rows;
+    auto add_row = [&rows](const QString& section, const QString& field, const QString& value) {
+        rows.push_back(InspectorRow{section, field, value});
     };
-    auto be_value = [&bytes](int count) -> quint64 {
+
+    if (!has_document()) {
+        add_row(QStringLiteral("Overview"), QStringLiteral("Status"), QStringLiteral("Open a file to inspect values."));
+        return rows;
+    }
+
+    const bool use_selection = has_selection();
+    const qint64 selected_length = selection_size();
+    const qint64 start_offset = use_selection ? selection_start() : caret_offset_;
+    const qint64 inspect_length = qMin<qint64>(use_selection ? selected_length : 8, 8);
+    const QByteArray bytes = source_.read_range(start_offset, inspect_length);
+    if (bytes.isEmpty()) {
+        add_row(QStringLiteral("Overview"), QStringLiteral("Status"), QStringLiteral("No bytes available at the current offset."));
+        return rows;
+    }
+
+    auto read_unsigned = [&bytes, this](int count) -> quint64 {
         quint64 value = 0;
+        if (inspector_endian_ == InspectorEndian::Little) {
+            for (int i = 0; i < count && i < bytes.size(); ++i) {
+                value |= static_cast<quint64>(static_cast<quint8>(bytes.at(i))) << (i * 8);
+            }
+            return value;
+        }
+
         for (int i = 0; i < count && i < bytes.size(); ++i) {
             value = (value << 8) | static_cast<quint64>(static_cast<quint8>(bytes.at(i)));
         }
         return value;
     };
+    auto read_signed = [&read_unsigned](int count) -> qint64 {
+        const quint64 unsigned_value = read_unsigned(count);
+        const int bits = count * 8;
+        if (bits <= 0 || bits >= 64) {
+            return static_cast<qint64>(unsigned_value);
+        }
+
+        const quint64 sign_mask = 1ULL << (bits - 1);
+        if ((unsigned_value & sign_mask) == 0) {
+            return static_cast<qint64>(unsigned_value);
+        }
+
+        const quint64 extend_mask = ~((1ULL << bits) - 1);
+        return static_cast<qint64>(unsigned_value | extend_mask);
+    };
+    auto read_float = [&bytes, this](int count) -> double {
+        std::array<unsigned char, 8> raw{};
+        for (int i = 0; i < count && i < bytes.size(); ++i) {
+            const int index = inspector_endian_ == InspectorEndian::Little ? i : (count - 1 - i);
+            raw[static_cast<std::size_t>(index)] = static_cast<unsigned char>(bytes.at(i));
+        }
+
+        if (count == 4) {
+            float value = 0.0F;
+            std::memcpy(&value, raw.data(), sizeof(float));
+            return value;
+        }
+
+        double value = 0.0;
+        std::memcpy(&value, raw.data(), sizeof(double));
+        return value;
+    };
 
     QString ascii;
     ascii.reserve(bytes.size());
-    for (const char byte : bytes) {
-        ascii.append(printable_char(static_cast<quint8>(byte)));
-    }
-
-    QString text = QStringLiteral("Inspector\n\n");
-    text += QStringLiteral("Offset: 0x%1\n").arg(caret_offset_, 8, 16, QChar(u'0')).toUpper();
-    text += QStringLiteral("Selection: %1 bytes\n").arg(selection_size());
-    text += QStringLiteral("Bytes: ");
+    QString hex_bytes;
     for (int i = 0; i < bytes.size(); ++i) {
         if (i > 0) {
-            text += QLatin1Char(' ');
+            hex_bytes += QLatin1Char(' ');
         }
-        text += hex_byte(static_cast<quint8>(bytes.at(i)));
-    }
-    text += QStringLiteral("\nASCII: %1\n\n").arg(ascii);
-
-    text += QStringLiteral("u8:  %1\n").arg(static_cast<quint8>(bytes.at(0)));
-    if (bytes.size() >= 2) {
-        text += QStringLiteral("u16 LE: %1\n").arg(le_value(2));
-        text += QStringLiteral("u16 BE: %1\n").arg(be_value(2));
-    }
-    if (bytes.size() >= 4) {
-        text += QStringLiteral("u32 LE: %1\n").arg(le_value(4));
-        text += QStringLiteral("u32 BE: %1\n").arg(be_value(4));
-    }
-    if (bytes.size() >= 8) {
-        text += QStringLiteral("u64 LE: %1\n").arg(le_value(8));
-        text += QStringLiteral("u64 BE: %1\n").arg(be_value(8));
+        const quint8 value = static_cast<quint8>(bytes.at(i));
+        hex_bytes += hex_byte(value);
+        ascii.append(printable_char(value));
     }
 
+    add_row(QStringLiteral("Overview"), QStringLiteral("Offset"), QStringLiteral("0x%1").arg(start_offset, 8, 16, QChar(u'0')).toUpper());
+    if (use_selection) {
+        QString selection_text = QStringLiteral("%1 bytes").arg(selected_length);
+        if (selected_length > bytes.size()) {
+            selection_text += QStringLiteral(" (showing first %1)").arg(bytes.size());
+        }
+        add_row(QStringLiteral("Overview"), QStringLiteral("Selection"), selection_text);
+    } else {
+        add_row(QStringLiteral("Overview"), QStringLiteral("Selection"), QStringLiteral("No active selection"));
+        add_row(QStringLiteral("Overview"), QStringLiteral("Window"), QStringLiteral("%1 bytes from caret").arg(bytes.size()));
+    }
+    add_row(QStringLiteral("Overview"), QStringLiteral("Endian"), inspector_endian_ == InspectorEndian::Little ? QStringLiteral("Little") : QStringLiteral("Big"));
+    add_row(QStringLiteral("Overview"), QStringLiteral("Bytes"), hex_bytes);
+    add_row(QStringLiteral("Overview"), QStringLiteral("ASCII"), ascii);
+
+    if (use_selection) {
+        const int width = bytes.size();
+        const int bits = width * 8;
+        add_row(QStringLiteral("Integers"), QStringLiteral("u%1").arg(bits), QString::number(read_unsigned(width)));
+        add_row(QStringLiteral("Integers"), QStringLiteral("i%1").arg(bits), QString::number(read_signed(width)));
+        if (width == 4) {
+            add_row(QStringLiteral("Floating Point"), QStringLiteral("f32"), QString::number(read_float(4), 'g', 9));
+            add_row(
+                QStringLiteral("Time"),
+                QStringLiteral("Unix32"),
+                QDateTime::fromSecsSinceEpoch(static_cast<qint64>(read_signed(4)), Qt::UTC).toString(Qt::ISODate));
+        } else if (width == 8) {
+            add_row(QStringLiteral("Floating Point"), QStringLiteral("f64"), QString::number(read_float(8), 'g', 17));
+            add_row(
+                QStringLiteral("Time"),
+                QStringLiteral("Unix64"),
+                QDateTime::fromSecsSinceEpoch(static_cast<qint64>(read_signed(8)), Qt::UTC).toString(Qt::ISODate));
+        }
+    } else {
+        add_row(QStringLiteral("Integers"), QStringLiteral("u8"), QString::number(read_unsigned(1)));
+        add_row(QStringLiteral("Integers"), QStringLiteral("i8"), QString::number(read_signed(1)));
+        if (bytes.size() >= 2) {
+            add_row(QStringLiteral("Integers"), QStringLiteral("u16"), QString::number(read_unsigned(2)));
+            add_row(QStringLiteral("Integers"), QStringLiteral("i16"), QString::number(read_signed(2)));
+        }
+        if (bytes.size() >= 4) {
+            add_row(QStringLiteral("Integers"), QStringLiteral("u32"), QString::number(read_unsigned(4)));
+            add_row(QStringLiteral("Integers"), QStringLiteral("i32"), QString::number(read_signed(4)));
+            add_row(QStringLiteral("Floating Point"), QStringLiteral("f32"), QString::number(read_float(4), 'g', 9));
+            add_row(
+                QStringLiteral("Time"),
+                QStringLiteral("Unix32"),
+                QDateTime::fromSecsSinceEpoch(static_cast<qint64>(read_signed(4)), Qt::UTC).toString(Qt::ISODate));
+        }
+        if (bytes.size() >= 8) {
+            add_row(QStringLiteral("Integers"), QStringLiteral("u64"), QString::number(read_unsigned(8)));
+            add_row(QStringLiteral("Integers"), QStringLiteral("i64"), QString::number(read_signed(8)));
+            add_row(QStringLiteral("Floating Point"), QStringLiteral("f64"), QString::number(read_float(8), 'g', 17));
+            add_row(
+                QStringLiteral("Time"),
+                QStringLiteral("Unix64"),
+                QDateTime::fromSecsSinceEpoch(static_cast<qint64>(read_signed(8)), Qt::UTC).toString(Qt::ISODate));
+        }
+    }
+
+    return rows;
+}
+
+QString HexView::format_inspector_text() const {
+    QString text = QStringLiteral("Inspector\n\n");
+    QString current_section;
+    const QVector<InspectorRow> rows = build_inspector_rows();
+    for (const InspectorRow& row : rows) {
+        if (row.section != current_section) {
+            if (!current_section.isEmpty()) {
+                text += QLatin1Char('\n');
+            }
+            current_section = row.section;
+        }
+        text += QStringLiteral("%1: %2\n").arg(row.field, row.value);
+    }
     return text;
 }
 
-qint64 HexView::search_from(const QByteArray& pattern, qint64 start_offset, bool forward) const {
+qint64 HexView::search_from(const QByteArray& pattern, qint64 start_offset, bool forward, qint64 range_start, qint64 range_end) const {
     if (!has_document() || pattern.isEmpty()) {
         return -1;
     }
 
     constexpr qint64 kChunkSize = 256 * 1024;
     const qint64 overlap = qMax<qint64>(0, pattern.size() - 1);
+    const qint64 bounded_start = qMax<qint64>(0, range_start < 0 ? 0 : range_start);
+    const qint64 bounded_end = qMin(document_size(), range_end < 0 ? document_size() : range_end);
+    if (bounded_end <= bounded_start || pattern.size() > bounded_end - bounded_start) {
+        return -1;
+    }
 
     if (forward) {
-        for (qint64 offset = qMax<qint64>(0, start_offset); offset < document_size();) {
-            const qint64 to_read = qMin(document_size() - offset, kChunkSize + overlap);
+        for (qint64 offset = qBound(bounded_start, start_offset, bounded_end); offset < bounded_end;) {
+            const qint64 to_read = qMin(bounded_end - offset, kChunkSize + overlap);
             const QByteArray chunk = source_.read_range(offset, to_read);
             if (chunk.isEmpty()) {
                 break;
@@ -938,8 +1569,8 @@ qint64 HexView::search_from(const QByteArray& pattern, qint64 start_offset, bool
         return -1;
     }
 
-    for (qint64 chunk_end = qMin(document_size(), start_offset + 1); chunk_end > 0;) {
-        const qint64 chunk_start = qMax<qint64>(0, chunk_end - (kChunkSize + overlap));
+    for (qint64 chunk_end = qMin(bounded_end, start_offset + 1); chunk_end > bounded_start;) {
+        const qint64 chunk_start = qMax(bounded_start, chunk_end - (kChunkSize + overlap));
         const QByteArray chunk = source_.read_range(chunk_start, chunk_end - chunk_start);
         if (chunk.isEmpty()) {
             break;
@@ -959,11 +1590,11 @@ qint64 HexView::search_from(const QByteArray& pattern, qint64 start_offset, bool
             }
         }
 
-        if (chunk_start == 0) {
+        if (chunk_start == bounded_start) {
             break;
         }
         chunk_end = chunk_start + overlap;
-        start_offset = qMin(start_offset, chunk_end - 1);
+        start_offset = qMin(qMax(start_offset, bounded_start), chunk_end - 1);
     }
 
     return -1;

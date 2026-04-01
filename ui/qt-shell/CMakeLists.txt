@@ -15,6 +15,8 @@ set(HEX_MASTER_RUST_LIB "${CMAKE_SOURCE_DIR}/../../target/debug/hexapp_ffi.dll.l
 set(HEX_MASTER_RUST_DLL "${CMAKE_SOURCE_DIR}/../../target/debug/hexapp_ffi.dll")
 
 qt_add_executable(hex_master_qt_shell WIN32
+    resources/app_icon.rc
+    resources/app_resources.qrc
     src/file_byte_source.cpp
     src/hex_view.cpp
     src/main.cpp

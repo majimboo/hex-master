@@ -10,6 +10,27 @@ class HexView final : public QAbstractScrollArea {
     Q_OBJECT
 
 public:
+    enum class EditMode {
+        Insert,
+        Overwrite,
+    };
+
+    enum class ActivePane {
+        Hex,
+        Text,
+    };
+
+    enum class InspectorEndian {
+        Little,
+        Big,
+    };
+
+    struct InspectorRow {
+        QString section;
+        QString field;
+        QString value;
+    };
+
     explicit HexView(QWidget* parent = nullptr);
 
     bool open_file(const QString& path);
@@ -20,17 +41,38 @@ public:
     qint64 bytes_per_row() const;
     void set_bytes_per_row(qint64 bytes_per_row);
     void go_to_offset(qint64 offset);
+    EditMode edit_mode() const;
+    void set_edit_mode(EditMode mode);
+    void toggle_edit_mode();
+    bool is_read_only() const;
     bool is_dirty() const;
     bool save();
     bool save_as(const QString& path);
     bool undo();
     bool redo();
+    bool has_selection() const;
+    QByteArray selected_bytes() const;
+    QString selected_hex_text() const;
+    bool insert_at_caret(const QByteArray& bytes);
+    bool delete_selection();
+    bool delete_at_caret();
+    bool backspace_at_caret();
+    bool overwrite_at_caret(const QByteArray& bytes);
+    bool overwrite_selection(const QByteArray& bytes);
+    bool fill_selection(quint8 value);
     void toggle_bookmark_at_caret();
     void next_bookmark();
     void previous_bookmark();
     bool find_pattern(const QByteArray& pattern, bool forward, bool from_caret, qint64* found_offset = nullptr);
+    bool find_pattern_in_selection(const QByteArray& pattern, bool forward, bool from_caret, qint64* found_offset = nullptr);
+    QVector<qint64> find_all_patterns(const QByteArray& pattern, bool selection_only = false) const;
     QString format_search_result(qint64 found_offset, const QByteArray& pattern, bool hex_mode) const;
+    QString build_hash_report(bool selection_only) const;
     bool replace_range(qint64 offset, const QByteArray& before, const QByteArray& after);
+    qint64 replace_all(const QByteArray& before, const QByteArray& after, bool selection_only);
+    InspectorEndian inspector_endian() const;
+    void set_inspector_endian(InspectorEndian endian);
+    QVector<InspectorRow> inspector_rows() const;
 
 signals:
     void status_changed(qulonglong caret_offset, qulonglong selection_size, qulonglong document_size);
@@ -79,7 +121,9 @@ private:
     void emit_status();
     void emit_bookmarks();
     void emit_inspector();
+    void refresh_after_edit(bool ensure_visible = true);
     void move_caret(qint64 offset, bool extend_selection);
+    bool apply_text_input(const QString& text);
     void ensure_caret_visible();
     void scroll_to_row(qint64 row);
     qint64 visible_row_count() const;
@@ -100,12 +144,14 @@ private:
     int hex_value_for_key(int key) const;
     bool apply_hex_input(int nibble_value);
     qint64 offset_at(const QPoint& point) const;
+    ActivePane pane_at(const QPoint& point) const;
     QString hex_byte(quint8 value) const;
     QChar printable_char(quint8 value) const;
     bool has_bookmark(qint64 offset) const;
     QString format_bookmarks_text() const;
+    QVector<InspectorRow> build_inspector_rows() const;
     QString format_inspector_text() const;
-    qint64 search_from(const QByteArray& pattern, qint64 start_offset, bool forward) const;
+    qint64 search_from(const QByteArray& pattern, qint64 start_offset, bool forward, qint64 range_start = -1, qint64 range_end = -1) const;
     void leaveEvent(QEvent* event) override;
 
     FileByteSource source_;
@@ -123,4 +169,8 @@ private:
     QVector<CachedRow> cached_rows_;
     qint64 hovered_offset_ = -1;
     QSet<qint64> bookmarks_;
+    EditMode edit_mode_ = EditMode::Overwrite;
+    ActivePane active_pane_ = ActivePane::Hex;
+    qint8 pending_insert_high_nibble_ = -1;
+    InspectorEndian inspector_endian_ = InspectorEndian::Little;
 };
