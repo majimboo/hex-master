@@ -29,7 +29,7 @@ This file tracks the public-release baseline rather than the original scaffold M
 - [x] Find all
 - [x] Replace next
 - [x] Replace all
-- [ ] Background progress and cancel
+- [x] Background progress and cancel
 
 ## Inspector and Analysis
 
@@ -74,6 +74,7 @@ This file tracks the public-release baseline rather than the original scaffold M
 - [ ] Installer packaging
 - [ ] Code signing
 - [ ] Crash recovery / autosave
-- [ ] Background jobs for heavy operations
+- [ ] Background jobs for remaining heavy operations such as hash/analysis
 - [ ] Larger-file structural edit scalability
+- [ ] Aligned insert/delete-aware compare engine
 - [ ] Broader release QA

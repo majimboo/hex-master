@@ -137,6 +137,7 @@ private:
     void reset_view();
     void update_status(qulonglong caret_offset, qulonglong selection_size, qulonglong document_size);
     void update_window_title(const QString& title, qulonglong document_size);
+    void update_save_action_state(bool dirty);
     void run_search(bool forward, bool from_caret, bool selection_only = false);
     void run_find_all(bool selection_only);
     void update_inspector_view(const QString& text);

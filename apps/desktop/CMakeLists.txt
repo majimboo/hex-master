@@ -7,7 +7,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Concurrent)
 find_program(CARGO_EXECUTABLE cargo REQUIRED)
 
 qt_standard_project_setup()
@@ -53,6 +53,7 @@ target_link_libraries(hex_master_qt_shell PRIVATE
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets
+    Qt6::Concurrent
     "$<$<CONFIG:Debug>:${HEX_MASTER_RUST_LIB_DEBUG}>"
     "$<$<NOT:$<CONFIG:Debug>>:${HEX_MASTER_RUST_LIB_RELEASE}>"
 )

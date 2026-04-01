@@ -83,6 +83,7 @@ bool HexView::open_file(const QString& path) {
     high_nibble_pending_ = true;
     active_pane_ = ActivePane::Hex;
     bookmarks_.clear();
+    modified_ranges_.clear();
     ++render_generation_;
     refresh_metrics();
     invalidate_row_cache();
@@ -196,6 +197,7 @@ bool HexView::is_dirty() const {
 bool HexView::save() {
     const bool saved = source_.save();
     if (saved) {
+        modified_ranges_.clear();
         ++render_generation_;
         invalidate_row_cache();
         emit document_loaded(source_.display_name(), static_cast<qulonglong>(source_.size()));
@@ -208,6 +210,7 @@ bool HexView::save() {
 bool HexView::save_as(const QString& path) {
     const bool saved = source_.save_as(path);
     if (saved) {
+        modified_ranges_.clear();
         ++render_generation_;
         invalidate_row_cache();
         emit document_loaded(source_.display_name(), static_cast<qulonglong>(source_.size()));
@@ -220,6 +223,7 @@ bool HexView::save_as(const QString& path) {
 bool HexView::save_with_progress(const std::function<bool(qint64, qint64)>& progress_callback) {
     const bool saved = source_.save_with_progress(progress_callback);
     if (saved) {
+        modified_ranges_.clear();
         ++render_generation_;
         invalidate_row_cache();
         emit document_loaded(source_.display_name(), static_cast<qulonglong>(source_.size()));
@@ -232,6 +236,7 @@ bool HexView::save_with_progress(const std::function<bool(qint64, qint64)>& prog
 bool HexView::save_as_with_progress(const QString& path, const std::function<bool(qint64, qint64)>& progress_callback) {
     const bool saved = source_.save_as_with_progress(path, progress_callback);
     if (saved) {
+        modified_ranges_.clear();
         ++render_generation_;
         invalidate_row_cache();
         emit document_loaded(source_.display_name(), static_cast<qulonglong>(source_.size()));
@@ -244,6 +249,7 @@ bool HexView::save_as_with_progress(const QString& path, const std::function<boo
 bool HexView::undo() {
     const bool undone = source_.undo();
     if (undone) {
+        modified_ranges_.clear();
         ++render_generation_;
         invalidate_row_cache();
         emit_status();
@@ -255,6 +261,7 @@ bool HexView::undo() {
 bool HexView::redo() {
     const bool redone = source_.redo();
     if (redone) {
+        modified_ranges_.clear();
         ++render_generation_;
         invalidate_row_cache();
         emit_status();
@@ -321,6 +328,7 @@ bool HexView::insert_at_caret(const QByteArray& bytes) {
     if (!source_.insert_range(start, bytes)) {
         return false;
     }
+    add_modified_range(start, bytes.size());
 
     selection_anchor_ = start;
     selection_active_ = bytes.size() > 1;
@@ -340,6 +348,9 @@ bool HexView::delete_selection() {
     const qint64 length = selection_size();
     if (!source_.delete_range(start, length)) {
         return false;
+    }
+    if (document_size() > 0) {
+        add_modified_range(qMin(start, qMax<qint64>(0, document_size() - 1)), 1);
     }
 
     selection_anchor_ = -1;
@@ -362,6 +373,9 @@ bool HexView::delete_at_caret() {
 
     if (!source_.delete_range(caret_offset_, 1)) {
         return false;
+    }
+    if (document_size() > 0) {
+        add_modified_range(qMin(caret_offset_, qMax<qint64>(0, document_size() - 1)), 1);
     }
 
     selection_anchor_ = -1;
@@ -390,6 +404,9 @@ bool HexView::backspace_at_caret() {
     if (!source_.delete_range(delete_offset, 1)) {
         return false;
     }
+    if (document_size() > 0) {
+        add_modified_range(qMin(delete_offset, qMax<qint64>(0, document_size() - 1)), 1);
+    }
 
     selection_anchor_ = -1;
     selection_active_ = false;
@@ -413,6 +430,7 @@ bool HexView::overwrite_at_caret(const QByteArray& bytes) {
     if (!source_.overwrite_range(start, bytes)) {
         return false;
     }
+    add_modified_range(start, bytes.size());
 
     selection_anchor_ = start;
     selection_active_ = bytes.size() > 1;
@@ -1174,7 +1192,26 @@ QColor HexView::highlight_color_for_offset(qint64 offset) const {
             return range.color;
         }
     }
+    for (const HighlightRange& range : modified_ranges_) {
+        if (range.length > 0 && offset >= range.offset && offset < range.offset + range.length) {
+            return range.color;
+        }
+    }
     return QColor();
+}
+
+void HexView::add_modified_range(qint64 offset, qint64 length) {
+    if (length <= 0) {
+        return;
+    }
+    modified_ranges_.push_back({offset, length, QColor(231, 76, 60, 90)});
+}
+
+void HexView::clear_modified_ranges() {
+    if (modified_ranges_.isEmpty()) {
+        return;
+    }
+    modified_ranges_.clear();
 }
 
 HexView::EditMode HexView::edit_mode() const {
@@ -1927,6 +1964,7 @@ bool HexView::apply_hex_input(int nibble_value) {
     if (!source_.overwrite_byte(caret_offset_, next)) {
         return false;
     }
+    add_modified_range(caret_offset_, 1);
 
     ++render_generation_;
     invalidate_row_cache();
@@ -1977,6 +2015,7 @@ bool HexView::apply_text_input(const QString& text) {
         if (!source_.insert_range(start, bytes)) {
             return false;
         }
+        add_modified_range(start, bytes.size());
     } else {
         if (has_selection()) {
             const qint64 length = selection_size();
@@ -1989,6 +2028,7 @@ bool HexView::apply_text_input(const QString& text) {
             if (!source_.overwrite_range(start, bytes)) {
                 return false;
             }
+            add_modified_range(start, bytes.size());
         } else {
             if (start < 0 || start >= document_size()) {
                 return false;
@@ -1997,6 +2037,7 @@ bool HexView::apply_text_input(const QString& text) {
                 return false;
             }
             bytes = bytes.left(1);
+            add_modified_range(start, bytes.size());
         }
     }
 

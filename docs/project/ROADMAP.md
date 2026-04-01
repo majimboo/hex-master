@@ -24,15 +24,15 @@ Already in place:
 
 Priority work:
 
-- move long-running search work off the UI thread
 - move hash and analysis work off the UI thread
-- add progress reporting and cancellation
+- extend background-job architecture beyond compare and schema execution
+- add cleaner cancel/progress behavior for remaining heavy operations
 - avoid visible UI stalls during large replace-all and analysis operations
 
 Exit criteria:
 
-- large searches and hashes no longer feel like the app is frozen
-- the UI provides progress or at least a cancelable job state for heavy work
+- large hashes and remaining heavy operations no longer feel like the app is frozen
+- the UI provides progress or a cancelable job state for heavy work consistently
 
 ## Following Milestone: Editing Scalability
 
@@ -52,7 +52,7 @@ Exit criteria:
 Priority work:
 
 - Windows installer packaging
-- release signing strategy
+- code signing strategy
 - cleaner runtime dependency bundling
 - clearer release notes generated from the changelog
 
@@ -78,10 +78,10 @@ Exit criteria:
 
 Possible future features after the 1.x stability work:
 
-- binary diff
+- aligned binary diff with insert/delete-aware compare
 - entropy and histogram views
 - annotations
-- templates
+- richer schema tooling or visual structure builders
 - scripting or plugin hooks
 
 These remain optional product-expansion work, not prerequisites for cleaning up the current release line.

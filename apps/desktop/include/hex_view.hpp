@@ -221,6 +221,8 @@ private:
     QString format_inspector_text() const;
     QVector<AnalysisRow> build_analysis_rows(bool selection_only) const;
     QColor highlight_color_for_offset(qint64 offset) const;
+    void add_modified_range(qint64 offset, qint64 length);
+    void clear_modified_ranges();
     static bool try_parse_hex_string(const QString& text, QByteArray& bytes);
     qint64 search_from(const QByteArray& pattern, qint64 start_offset, bool forward, qint64 range_start = -1, qint64 range_end = -1, const SearchProgressCallback& progress_callback = SearchProgressCallback()) const;
     void leaveEvent(QEvent* event) override;
@@ -251,4 +253,5 @@ private:
     int custom_address_width_ = -1;
     HeaderDivider active_divider_ = HeaderDivider::None;
     QVector<HighlightRange> highlight_ranges_;
+    QVector<HighlightRange> modified_ranges_;
 };
