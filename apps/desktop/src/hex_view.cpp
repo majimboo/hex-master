@@ -1155,6 +1155,28 @@ void HexView::select_range(qint64 offset, qint64 length) {
     viewport()->update();
 }
 
+void HexView::set_highlight_ranges(const QVector<HighlightRange>& ranges) {
+    highlight_ranges_ = ranges;
+    viewport()->update();
+}
+
+void HexView::clear_highlight_ranges() {
+    if (highlight_ranges_.isEmpty()) {
+        return;
+    }
+    highlight_ranges_.clear();
+    viewport()->update();
+}
+
+QColor HexView::highlight_color_for_offset(qint64 offset) const {
+    for (const HighlightRange& range : highlight_ranges_) {
+        if (range.length > 0 && offset >= range.offset && offset < range.offset + range.length) {
+            return range.color;
+        }
+    }
+    return QColor();
+}
+
 HexView::EditMode HexView::edit_mode() const {
     return edit_mode_;
 }
@@ -1289,10 +1311,16 @@ void HexView::paintEvent(QPaintEvent* event) {
             const bool selected = selection_active_ && offset >= selected_start && offset < selected_end;
             const bool is_caret = offset == caret_offset_;
             const bool hovered = offset == hovered_offset_;
+            const QColor highlight_color = highlight_color_for_offset(offset);
 
             if (hovered && !selected && !is_caret) {
                 painter.fillRect(hex_rect.adjusted(1, 1, -1, -1), hover_fill);
                 painter.fillRect(ascii_rect.adjusted(1, 1, -1, -1), hover_fill);
+            }
+
+            if (highlight_color.isValid() && !selected && !is_caret) {
+                painter.fillRect(hex_rect.adjusted(1, 1, -1, -1), highlight_color);
+                painter.fillRect(ascii_rect.adjusted(1, 1, -1, -1), highlight_color);
             }
 
             if (selected || is_caret) {

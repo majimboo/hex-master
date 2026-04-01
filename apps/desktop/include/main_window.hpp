@@ -111,6 +111,7 @@ private:
     void fill_selection();
     void compute_hashes();
     void open_schema_tool();
+    void open_compare_tool();
     void open_settings();
     void show_about();
     void set_insert_mode();
@@ -184,6 +185,7 @@ private:
     QTreeWidget* analysis_tree_ = nullptr;
     QLabel* status_label_ = nullptr;
     QDialog* schema_tool_dialog_ = nullptr;
+    QDialog* compare_tool_dialog_ = nullptr;
     QToolBar* toolbar_ = nullptr;
     QWidget* edit_mode_toggle_ = nullptr;
     QComboBox* goto_offset_edit_ = nullptr;
@@ -201,6 +203,7 @@ private:
     QAction* fill_selection_action_ = nullptr;
     QAction* compute_hashes_action_ = nullptr;
     QAction* schema_tool_action_ = nullptr;
+    QAction* compare_tool_action_ = nullptr;
     QAction* settings_action_ = nullptr;
     QAction* insert_mode_action_ = nullptr;
     QAction* overwrite_mode_action_ = nullptr;

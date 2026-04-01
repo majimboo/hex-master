@@ -29,6 +29,7 @@
 #include <QElapsedTimer>
 #include <QProgressDialog>
 #include <QPushButton>
+#include <QGridLayout>
 #include <QStackedWidget>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -486,6 +487,9 @@ public:
         });
         connect(run_button, &QPushButton::clicked, this, [this]() { apply_schema(); });
         connect(editor_, &QPlainTextEdit::textChanged, this, [this]() { syntax_timer_->start(); });
+        connect(editor_->document(), &QTextDocument::modificationChanged, this, [this](bool) {
+            update_window_title();
+        });
         connect(syntax_timer_, &QTimer::timeout, this, [this]() { validate_schema(); });
         connect(structure_tree_, &QTreeWidget::itemExpanded, this, [this](QTreeWidgetItem* item) { populate_item_children(item); });
         connect(structure_tree_, &QTreeWidget::itemActivated, this, [this](QTreeWidgetItem*, int) { activate_item(); });
@@ -503,6 +507,7 @@ public:
             schema_text = StructureSchema::default_schema_template();
         }
         editor_->setPlainText(schema_text);
+        mark_schema_clean();
         const QString offset = settings.value(QStringLiteral("schema/lastOffset"), QStringLiteral("0x0")).toString();
         base_offset_edit_->setText(offset);
         update_window_title();
@@ -575,10 +580,57 @@ private:
         }
     }
 
+    QString current_schema_title() const {
+        return current_path_.isEmpty() ? QStringLiteral("Untitled Schema") : QFileInfo(current_path_).fileName();
+    }
+
+    bool has_unsaved_changes() const {
+        return editor_ != nullptr && editor_->document()->isModified();
+    }
+
+    void mark_schema_clean() {
+        if (editor_ != nullptr) {
+            editor_->document()->setModified(false);
+        }
+        update_window_title();
+    }
+
+    bool confirm_discard_schema_changes() {
+        if (!has_unsaved_changes()) {
+            return true;
+        }
+
+        const auto response = QMessageBox::warning(
+            this,
+            QStringLiteral("Unsaved Schema"),
+            QStringLiteral("Save changes to %1 before continuing?").arg(current_schema_title()),
+            QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel,
+            QMessageBox::Save);
+
+        if (response == QMessageBox::Cancel) {
+            return false;
+        }
+        if (response == QMessageBox::Save) {
+            const QString before_path = current_path_;
+            save_schema();
+            if (has_unsaved_changes()) {
+                if (before_path != current_path_) {
+                    update_window_title();
+                }
+                return false;
+            }
+        }
+        return true;
+    }
+
     void new_schema() {
+        if (!confirm_discard_schema_changes()) {
+            return;
+        }
         editor_->setPlainText(StructureSchema::default_schema_template());
         current_path_.clear();
         base_offset_edit_->setText(QStringLiteral("0x0"));
+        mark_schema_clean();
         update_window_title();
         validate_schema();
     }
@@ -633,6 +685,9 @@ private:
         if (path.isEmpty()) {
             return false;
         }
+        if (!confirm_discard_schema_changes()) {
+            return false;
+        }
         QFile file(path);
         if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
             recent_files_.removeAll(path);
@@ -643,6 +698,7 @@ private:
         editor_->setPlainText(QString::fromUtf8(file.readAll()));
         current_path_ = path;
         add_recent_file(path);
+        mark_schema_clean();
         update_window_title();
         validate_schema();
         set_status(QStringLiteral("Opened schema %1").arg(QFileInfo(path).fileName()));
@@ -671,6 +727,7 @@ private:
         }
         current_path_ = path;
         add_recent_file(path);
+        mark_schema_clean();
         update_window_title();
         set_status(QStringLiteral("Saved schema %1").arg(QFileInfo(path).fileName()));
         return true;
@@ -785,11 +842,12 @@ private:
     }
 
     void update_window_title() {
+        const QString suffix = has_unsaved_changes() ? QStringLiteral(" *") : QString();
         if (current_path_.isEmpty()) {
-            setWindowTitle(QStringLiteral("Schema Editor"));
+            setWindowTitle(QStringLiteral("Schema Editor%1").arg(suffix));
             return;
         }
-        setWindowTitle(QStringLiteral("Schema Editor - %1").arg(QFileInfo(current_path_).fileName()));
+        setWindowTitle(QStringLiteral("Schema Editor - %1%2").arg(QFileInfo(current_path_).fileName(), suffix));
     }
 
     void apply_schema() {
@@ -908,6 +966,10 @@ private:
     }
 
     void closeEvent(QCloseEvent* event) override {
+        if (!confirm_discard_schema_changes()) {
+            event->ignore();
+            return;
+        }
         save_to_settings();
         QDialog::closeEvent(event);
     }
@@ -924,6 +986,552 @@ private:
     StructureSchema::ParsedNode parsed_root_;
     bool has_parsed_root_ = false;
 };
+
+class CompareToolDialog final : public QDialog {
+public:
+    explicit CompareToolDialog(QWidget* parent = nullptr) : QDialog(parent) {
+        setWindowTitle(QStringLiteral("Compare Files"));
+        resize(1380, 860);
+
+        auto* root = new QVBoxLayout(this);
+
+        auto* path_layout = new QGridLayout();
+        path_layout->setContentsMargins(0, 0, 0, 0);
+        path_layout->setHorizontalSpacing(8);
+        path_layout->setVerticalSpacing(8);
+        root->addLayout(path_layout);
+
+        source_edit_ = new QLineEdit(this);
+        target_edit_ = new QLineEdit(this);
+        auto* browse_source = new QPushButton(QStringLiteral("Browse..."), this);
+        auto* browse_target = new QPushButton(QStringLiteral("Browse..."), this);
+        auto* swap_button = new QPushButton(QStringLiteral("Swap"), this);
+        compare_button_ = new QPushButton(QStringLiteral("Compare"), this);
+        compare_button_->setDefault(true);
+
+        path_layout->addWidget(new QLabel(QStringLiteral("Source File"), this), 0, 0);
+        path_layout->addWidget(source_edit_, 0, 1);
+        path_layout->addWidget(browse_source, 0, 2);
+        path_layout->addWidget(new QLabel(QStringLiteral("Target File"), this), 1, 0);
+        path_layout->addWidget(target_edit_, 1, 1);
+        path_layout->addWidget(browse_target, 1, 2);
+        path_layout->setColumnStretch(1, 1);
+
+        auto* actions_layout = new QHBoxLayout();
+        actions_layout->setContentsMargins(0, 4, 0, 0);
+        actions_layout->setSpacing(8);
+        actions_layout->addStretch(1);
+        actions_layout->addWidget(swap_button);
+        actions_layout->addWidget(compare_button_);
+        actions_layout->addStretch(1);
+        root->addLayout(actions_layout);
+
+        auto* summary_bar = new QWidget(this);
+        summary_bar->setObjectName(QStringLiteral("compareSummaryBar"));
+        summary_bar->setStyleSheet(QStringLiteral(
+            "#compareSummaryBar {"
+            " background: #eef3f8;"
+            " border: 1px solid #d3dce6;"
+            " border-radius: 8px;"
+            " }"
+            "#compareSummaryBar QLabel#comparePathLabel {"
+            " font-weight: 600;"
+            " color: #243447;"
+            " }"
+            "#compareSummaryBar QLabel#compareSummaryLabel {"
+            " color: #486070;"
+            " }"));
+        auto* summary_layout = new QHBoxLayout(summary_bar);
+        summary_layout->setContentsMargins(12, 8, 12, 8);
+        summary_layout->setSpacing(12);
+        summary_label_ = new QLabel(QStringLiteral("Choose two files and run compare."), summary_bar);
+        summary_label_->setObjectName(QStringLiteral("compareSummaryLabel"));
+        summary_label_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        previous_button_ = new QPushButton(QStringLiteral("Previous Difference"), summary_bar);
+        next_button_ = new QPushButton(QStringLiteral("Next Difference"), summary_bar);
+        summary_layout->addWidget(summary_label_, 1);
+        summary_layout->addWidget(previous_button_);
+        summary_layout->addWidget(next_button_);
+        root->addWidget(summary_bar);
+
+        auto* splitter = new QSplitter(Qt::Vertical, this);
+        root->addWidget(splitter, 1);
+
+        auto* views_widget = new QWidget(splitter);
+        auto* views_layout = new QHBoxLayout(views_widget);
+        views_layout->setContentsMargins(0, 0, 0, 0);
+        views_layout->setSpacing(0);
+        auto* left_container = new QWidget(views_widget);
+        auto* left_container_layout = new QVBoxLayout(left_container);
+        left_container_layout->setContentsMargins(0, 0, 0, 0);
+        left_container_layout->setSpacing(0);
+        left_label_ = new QLabel(QStringLiteral("Source"), left_container);
+        left_label_->setObjectName(QStringLiteral("comparePathLabel"));
+        left_label_->setStyleSheet(QStringLiteral(
+            "QLabel {"
+            " background: #eef3f8;"
+            " border: 1px solid #d3dce6;"
+            " border-bottom: 0;"
+            " padding: 6px 10px;"
+            " font-weight: 600;"
+            " color: #243447;"
+            " }"));
+        left_container_layout->addWidget(left_label_);
+        left_view_ = new HexView(left_container);
+        left_container_layout->addWidget(left_view_, 1);
+
+        auto* right_container = new QWidget(views_widget);
+        auto* right_container_layout = new QVBoxLayout(right_container);
+        right_container_layout->setContentsMargins(0, 0, 0, 0);
+        right_container_layout->setSpacing(0);
+        right_label_ = new QLabel(QStringLiteral("Target"), right_container);
+        right_label_->setObjectName(QStringLiteral("comparePathLabel"));
+        right_label_->setStyleSheet(QStringLiteral(
+            "QLabel {"
+            " background: #eef3f8;"
+            " border: 1px solid #d3dce6;"
+            " border-bottom: 0;"
+            " padding: 6px 10px;"
+            " font-weight: 600;"
+            " color: #243447;"
+            " }"));
+        right_container_layout->addWidget(right_label_);
+        right_view_ = new HexView(right_container);
+        right_container_layout->addWidget(right_view_, 1);
+
+        auto* view_splitter = new QSplitter(Qt::Horizontal, views_widget);
+        view_splitter->addWidget(left_container);
+        view_splitter->addWidget(right_container);
+        view_splitter->setStretchFactor(0, 1);
+        view_splitter->setStretchFactor(1, 1);
+        view_splitter->setSizes({650, 650});
+        views_layout->addWidget(view_splitter);
+
+        results_tree_ = new QTreeWidget(splitter);
+        results_tree_->setRootIsDecorated(false);
+        results_tree_->setAlternatingRowColors(true);
+        results_tree_->setUniformRowHeights(true);
+        results_tree_->setColumnCount(4);
+        results_tree_->setHeaderLabels({QStringLiteral("Offset"), QStringLiteral("Status"), QStringLiteral("Length"), QStringLiteral("Preview")});
+        results_tree_->header()->setStretchLastSection(true);
+        results_tree_->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+        results_tree_->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+        results_tree_->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+        splitter->setStretchFactor(0, 1);
+        splitter->setStretchFactor(1, 0);
+        splitter->setSizes({620, 220});
+
+        status_label_ = new QLabel(QStringLiteral("Ready."), this);
+        status_label_->setWordWrap(true);
+        root->addWidget(status_label_);
+
+        previous_button_->setEnabled(false);
+        next_button_->setEnabled(false);
+
+        connect(browse_source, &QPushButton::clicked, this, [this]() { browse_for_file(source_edit_, QStringLiteral("Open Source File")); });
+        connect(browse_target, &QPushButton::clicked, this, [this]() { browse_for_file(target_edit_, QStringLiteral("Open Target File")); });
+        connect(swap_button, &QPushButton::clicked, this, [this]() {
+            const QString source = source_edit_->text();
+            source_edit_->setText(target_edit_->text());
+            target_edit_->setText(source);
+            update_summary_labels();
+        });
+        connect(compare_button_, &QPushButton::clicked, this, [this]() { run_compare(); });
+        connect(previous_button_, &QPushButton::clicked, this, [this]() { select_previous_difference(); });
+        connect(next_button_, &QPushButton::clicked, this, [this]() { select_next_difference(); });
+        connect(results_tree_, &QTreeWidget::itemActivated, this, [this](QTreeWidgetItem*, int) { activate_result_item(); });
+        connect(results_tree_, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem*, int) { activate_result_item(); });
+        connect(left_view_, &HexView::status_changed, this, [this](qulonglong caret_offset, qulonglong, qulonglong) {
+            sync_views_from(left_view_, right_view_, static_cast<qint64>(caret_offset));
+        });
+        connect(right_view_, &HexView::status_changed, this, [this](qulonglong caret_offset, qulonglong, qulonglong) {
+            sync_views_from(right_view_, left_view_, static_cast<qint64>(caret_offset));
+        });
+
+        load_settings();
+        update_summary_labels();
+    }
+
+protected:
+    void closeEvent(QCloseEvent* event) override {
+        save_settings();
+        QDialog::closeEvent(event);
+    }
+
+private:
+    static QString format_size(qint64 bytes) {
+        const double value = static_cast<double>(bytes);
+        if (bytes >= (1LL << 30)) {
+            return QStringLiteral("%1 GiB").arg(value / static_cast<double>(1LL << 30), 0, 'f', 2);
+        }
+        if (bytes >= (1LL << 20)) {
+            return QStringLiteral("%1 MiB").arg(value / static_cast<double>(1LL << 20), 0, 'f', 2);
+        }
+        if (bytes >= (1LL << 10)) {
+            return QStringLiteral("%1 KiB").arg(value / static_cast<double>(1LL << 10), 0, 'f', 2);
+        }
+        return QStringLiteral("%1 B").arg(bytes);
+    }
+
+    void load_settings() {
+        QSettings settings;
+        const QString source = settings.value(QStringLiteral("compare/lastSource")).toString();
+        const QString target = settings.value(QStringLiteral("compare/lastTarget")).toString();
+        if (QFileInfo::exists(source)) {
+            source_edit_->setText(source);
+        }
+        if (QFileInfo::exists(target)) {
+            target_edit_->setText(target);
+        }
+        const QByteArray geometry = settings.value(QStringLiteral("compare/windowGeometry")).toByteArray();
+        if (!geometry.isEmpty()) {
+            restoreGeometry(geometry);
+        }
+    }
+
+    void save_settings() const {
+        QSettings settings;
+        settings.setValue(QStringLiteral("compare/lastSource"), source_edit_->text().trimmed());
+        settings.setValue(QStringLiteral("compare/lastTarget"), target_edit_->text().trimmed());
+        settings.setValue(QStringLiteral("compare/windowGeometry"), saveGeometry());
+    }
+
+    void browse_for_file(QLineEdit* edit, const QString& title) {
+        const QString start_dir = edit->text().isEmpty() ? QString() : QFileInfo(edit->text()).absolutePath();
+        const QString path = QFileDialog::getOpenFileName(this, title, start_dir);
+        if (!path.isEmpty()) {
+            edit->setText(path);
+            update_summary_labels();
+        }
+    }
+
+    void sync_views_from(HexView* source, HexView* target, qint64 offset) {
+        if (sync_guard_ || source == nullptr || target == nullptr || !target->has_document()) {
+            return;
+        }
+        sync_guard_ = true;
+        target->go_to_offset(offset);
+        sync_guard_ = false;
+    }
+
+    void update_summary_labels() {
+        const QString left_path = source_edit_->text().trimmed();
+        const QString right_path = target_edit_->text().trimmed();
+        left_label_->setText(left_path.isEmpty() ? QStringLiteral("Source") : QStringLiteral("%1 (Source)").arg(QFileInfo(left_path).fileName()));
+        right_label_->setText(right_path.isEmpty() ? QStringLiteral("Target") : QStringLiteral("%1 (Target)").arg(QFileInfo(right_path).fileName()));
+        left_label_->setToolTip(left_path);
+        right_label_->setToolTip(right_path);
+
+        int selectable_count = 0;
+        for (const QVariantMap& row : result_rows_) {
+            if (row.value(QStringLiteral("offset")).toLongLong() >= 0) {
+                ++selectable_count;
+            }
+        }
+        previous_button_->setEnabled(selectable_count > 0);
+        next_button_->setEnabled(selectable_count > 0);
+
+        if (selectable_count == 0) {
+            summary_label_->setText(QStringLiteral("Choose two files and run compare."));
+            return;
+        }
+
+        int current_position = 0;
+        if (current_result_index_ >= 0) {
+            for (int i = 0; i <= current_result_index_ && i < result_rows_.size(); ++i) {
+                if (result_rows_.at(i).value(QStringLiteral("offset")).toLongLong() >= 0) {
+                    ++current_position;
+                }
+            }
+        }
+        if (current_position > 0) {
+            summary_label_->setText(QStringLiteral("Showing %1 difference run(s). %2 of %3 selected.")
+                                        .arg(selectable_count)
+                                        .arg(current_position)
+                                        .arg(selectable_count));
+        } else {
+            summary_label_->setText(QStringLiteral("Showing %1 difference run(s). Use Previous Difference or Next Difference to navigate.")
+                                        .arg(selectable_count));
+        }
+    }
+
+    void set_status(const QString& text, bool error = false) {
+        status_label_->setText(text);
+        status_label_->setStyleSheet(error ? QStringLiteral("color: #8b1e1e;") : QString());
+    }
+
+    void populate_results_tree(const QString& summary, const QVector<QVariantMap>& rows) {
+        results_tree_->clear();
+        auto* summary_item = new QTreeWidgetItem(results_tree_, QStringList{QStringLiteral("Summary"), summary, QString(), QString()});
+        summary_item->setFlags(summary_item->flags() & ~Qt::ItemIsSelectable);
+
+        for (const QVariantMap& row : rows) {
+            const qint64 offset = row.value(QStringLiteral("offset")).toLongLong();
+            const qint64 length = row.value(QStringLiteral("length")).toLongLong();
+            const QString kind = row.value(QStringLiteral("kind")).toString();
+            const QString preview = row.value(QStringLiteral("preview")).toString();
+            auto* item = new QTreeWidgetItem(results_tree_, QStringList{
+                offset >= 0 ? QStringLiteral("0x%1").arg(offset, 8, 16, QChar(u'0')).toUpper() : QStringLiteral(""),
+                kind,
+                QString::number(length),
+                preview});
+            item->setData(0, Qt::UserRole, offset);
+            item->setData(1, Qt::UserRole, length);
+            if (offset < 0) {
+                item->setFlags(item->flags() & ~Qt::ItemIsSelectable);
+                item->setForeground(1, QBrush(QColor(120, 120, 120)));
+            } else if (kind == QStringLiteral("Changed")) {
+                item->setForeground(1, QBrush(QColor(180, 80, 40)));
+            } else if (kind == QStringLiteral("Only Left")) {
+                item->setForeground(1, QBrush(QColor(180, 40, 40)));
+            } else if (kind == QStringLiteral("Only Right")) {
+                item->setForeground(1, QBrush(QColor(40, 90, 180)));
+            }
+        }
+    }
+
+    void select_result_index(int index) {
+        if (index < 0 || index >= result_rows_.size()) {
+            return;
+        }
+        const QVariantMap row = result_rows_.at(index);
+        const qint64 offset = row.value(QStringLiteral("offset")).toLongLong();
+        const qint64 length = row.value(QStringLiteral("length")).toLongLong();
+        if (offset < 0) {
+            return;
+        }
+        current_result_index_ = index;
+        if (length > 0) {
+            left_view_->select_range(offset, length);
+            right_view_->select_range(offset, length);
+        } else {
+            left_view_->go_to_offset(offset);
+            right_view_->go_to_offset(offset);
+        }
+        update_summary_labels();
+    }
+
+    void activate_result_item() {
+        QTreeWidgetItem* item = results_tree_->currentItem();
+        if (item == nullptr) {
+            return;
+        }
+        const qint64 offset = item->data(0, Qt::UserRole).toLongLong();
+        const qint64 length = item->data(1, Qt::UserRole).toLongLong();
+        for (int i = 0; i < result_rows_.size(); ++i) {
+            if (result_rows_.at(i).value(QStringLiteral("offset")).toLongLong() == offset &&
+                result_rows_.at(i).value(QStringLiteral("length")).toLongLong() == length) {
+                select_result_index(i);
+                break;
+            }
+        }
+    }
+
+    void select_next_difference() {
+        int start = current_result_index_ < 0 ? -1 : current_result_index_;
+        for (int i = start + 1; i < result_rows_.size(); ++i) {
+            if (result_rows_.at(i).value(QStringLiteral("offset")).toLongLong() >= 0) {
+                select_result_index(i);
+                return;
+            }
+        }
+        set_status(QStringLiteral("Already at the last difference."));
+    }
+
+    void select_previous_difference() {
+        int start = current_result_index_ < 0 ? result_rows_.size() : current_result_index_;
+        for (int i = start - 1; i >= 0; --i) {
+            if (result_rows_.at(i).value(QStringLiteral("offset")).toLongLong() >= 0) {
+                select_result_index(i);
+                return;
+            }
+        }
+        set_status(QStringLiteral("Already at the first difference."));
+    }
+
+    void run_compare() {
+        const QString left_path = source_edit_->text().trimmed();
+        const QString right_path = target_edit_->text().trimmed();
+        if (left_path.isEmpty() || right_path.isEmpty()) {
+            QMessageBox::warning(this, QStringLiteral("Compare Files"), QStringLiteral("Choose both source and target files."));
+            return;
+        }
+        if (!left_view_->open_file(left_path) || !right_view_->open_file(right_path)) {
+            QMessageBox::warning(this, QStringLiteral("Compare Files"), QStringLiteral("Failed to open one of the selected files."));
+            return;
+        }
+
+        save_settings();
+        result_rows_.clear();
+        current_result_index_ = -1;
+        update_summary_labels();
+
+        const qint64 left_size = left_view_->document_size();
+        const qint64 right_size = right_view_->document_size();
+        const qint64 shared_size = qMin(left_size, right_size);
+        constexpr qint64 kChunkSize = 1 << 20;
+        constexpr int kMaxCompareRows = 5000;
+        const QColor changed_color(241, 196, 15, 110);
+        const QColor left_only_color(231, 76, 60, 90);
+        const QColor right_only_color(52, 152, 219, 90);
+
+        QProgressDialog progress_dialog(QStringLiteral("Comparing files..."), QStringLiteral("Cancel"), 0, 1000, this);
+        progress_dialog.setWindowTitle(QStringLiteral("Compare Files"));
+        progress_dialog.setWindowModality(Qt::WindowModal);
+        progress_dialog.setMinimumDuration(0);
+        progress_dialog.setAutoClose(false);
+        progress_dialog.setAutoReset(false);
+        progress_dialog.setMinimumWidth(480);
+        progress_dialog.setValue(0);
+
+        QVector<QVariantMap> rows;
+        rows.reserve(kMaxCompareRows);
+        QVector<HexView::HighlightRange> left_highlights;
+        QVector<HexView::HighlightRange> right_highlights;
+        qint64 match_runs = 0;
+        qint64 match_bytes = 0;
+        qint64 omitted_difference_runs = 0;
+        qint64 omitted_difference_bytes = 0;
+
+        auto push_row = [&](qint64 offset, qint64 length, const QString& kind, const QByteArray& preview_bytes) {
+            if (rows.size() >= kMaxCompareRows) {
+                ++omitted_difference_runs;
+                omitted_difference_bytes += length;
+                return;
+            }
+            QString preview;
+            const int shown = qMin(preview_bytes.size(), 16);
+            for (int i = 0; i < shown; ++i) {
+                if (i > 0) {
+                    preview += QLatin1Char(' ');
+                }
+                preview += QStringLiteral("%1")
+                               .arg(static_cast<quint8>(preview_bytes.at(i)), 2, 16, QChar(u'0'))
+                               .toUpper();
+            }
+            rows.push_back(QVariantMap{
+                {QStringLiteral("offset"), offset},
+                {QStringLiteral("length"), length},
+                {QStringLiteral("kind"), kind},
+                {QStringLiteral("preview"), preview},
+            });
+        };
+
+        QString current_kind;
+        qint64 current_offset = -1;
+        qint64 current_length = 0;
+        QByteArray current_preview;
+        auto flush_run = [&]() {
+            if (current_length <= 0 || current_kind.isEmpty()) {
+                return;
+            }
+            if (current_kind == QStringLiteral("Match")) {
+                ++match_runs;
+                match_bytes += current_length;
+            } else {
+                push_row(current_offset, current_length, current_kind, current_preview);
+                if (current_kind == QStringLiteral("Changed")) {
+                    left_highlights.push_back({current_offset, current_length, changed_color});
+                    right_highlights.push_back({current_offset, current_length, changed_color});
+                }
+            }
+            current_kind.clear();
+            current_offset = -1;
+            current_length = 0;
+            current_preview.clear();
+        };
+
+        for (qint64 chunk_offset = 0; chunk_offset < shared_size; chunk_offset += kChunkSize) {
+            if (progress_dialog.wasCanceled()) {
+                break;
+            }
+            const qint64 chunk = qMin(kChunkSize, shared_size - chunk_offset);
+            const QByteArray left = left_view_->read_bytes(chunk_offset, chunk);
+            const QByteArray right = right_view_->read_bytes(chunk_offset, chunk);
+            for (int i = 0; i < chunk; ++i) {
+                const QString kind = left.at(i) == right.at(i) ? QStringLiteral("Match") : QStringLiteral("Changed");
+                const qint64 absolute_offset = chunk_offset + i;
+                if (kind != current_kind || absolute_offset != current_offset + current_length) {
+                    flush_run();
+                    current_kind = kind;
+                    current_offset = absolute_offset;
+                    current_length = 1;
+                    current_preview = QByteArray(1, left.at(i));
+                } else {
+                    ++current_length;
+                    if (current_preview.size() < 16) {
+                        current_preview.append(left.at(i));
+                    }
+                }
+            }
+            progress_dialog.setValue(shared_size > 0 ? static_cast<int>((chunk_offset + chunk) * 1000 / qMax<qint64>(1, shared_size)) : 1000);
+            progress_dialog.setLabelText(QStringLiteral("Comparing %1 of %2")
+                                             .arg(format_size(chunk_offset + chunk))
+                                             .arg(format_size(shared_size)));
+            QApplication::processEvents(QEventLoop::AllEvents, 50);
+        }
+        flush_run();
+
+        if (!progress_dialog.wasCanceled()) {
+            if (left_size > shared_size) {
+                left_highlights.push_back({shared_size, left_size - shared_size, left_only_color});
+                push_row(shared_size, left_size - shared_size, QStringLiteral("Only Left"), left_view_->read_bytes(shared_size, qMin<qint64>(16, left_size - shared_size)));
+            } else if (right_size > shared_size) {
+                right_highlights.push_back({shared_size, right_size - shared_size, right_only_color});
+                push_row(shared_size, right_size - shared_size, QStringLiteral("Only Right"), right_view_->read_bytes(shared_size, qMin<qint64>(16, right_size - shared_size)));
+            }
+        }
+        progress_dialog.setValue(1000);
+
+        if (omitted_difference_runs > 0) {
+            rows.push_back(QVariantMap{
+                {QStringLiteral("offset"), -1},
+                {QStringLiteral("length"), omitted_difference_bytes},
+                {QStringLiteral("kind"), QStringLiteral("More")},
+                {QStringLiteral("preview"), QStringLiteral("Showing first %1 difference runs").arg(kMaxCompareRows)},
+            });
+        }
+
+        left_view_->set_highlight_ranges(left_highlights);
+        right_view_->set_highlight_ranges(right_highlights);
+        result_rows_ = rows;
+        populate_results_tree(
+            QStringLiteral("%1 difference run(s)%2, %3 match run(s), matched %4, left %5, right %6")
+                .arg(rows.size() - (omitted_difference_runs > 0 ? 1 : 0))
+                .arg(omitted_difference_runs > 0 ? QStringLiteral(" + %1 more omitted").arg(omitted_difference_runs) : QString())
+                .arg(match_runs)
+                .arg(format_size(match_bytes))
+                .arg(left_size)
+                .arg(right_size),
+            rows);
+
+        for (int i = 0; i < result_rows_.size(); ++i) {
+            if (result_rows_.at(i).value(QStringLiteral("offset")).toLongLong() >= 0) {
+                current_result_index_ = i;
+                break;
+            }
+        }
+        update_summary_labels();
+        set_status(QStringLiteral("Compared %1 and %2.").arg(QFileInfo(left_path).fileName(), QFileInfo(right_path).fileName()));
+    }
+
+    QLineEdit* source_edit_ = nullptr;
+    QLineEdit* target_edit_ = nullptr;
+    QPushButton* compare_button_ = nullptr;
+    QLabel* left_label_ = nullptr;
+    QLabel* right_label_ = nullptr;
+    QLabel* summary_label_ = nullptr;
+    QPushButton* previous_button_ = nullptr;
+    QPushButton* next_button_ = nullptr;
+    HexView* left_view_ = nullptr;
+    HexView* right_view_ = nullptr;
+    QTreeWidget* results_tree_ = nullptr;
+    QLabel* status_label_ = nullptr;
+    QVector<QVariantMap> result_rows_;
+    int current_result_index_ = -1;
+    bool sync_guard_ = false;
+};
+
 }
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
@@ -1046,6 +1654,8 @@ void MainWindow::setup_menu() {
     connect(compute_hashes_action_, &QAction::triggered, this, &MainWindow::compute_hashes);
     schema_tool_action_ = tools_menu->addAction("Schema &Editor...");
     connect(schema_tool_action_, &QAction::triggered, this, &MainWindow::open_schema_tool);
+    compare_tool_action_ = tools_menu->addAction("&Compare Files...");
+    connect(compare_tool_action_, &QAction::triggered, this, &MainWindow::open_compare_tool);
     settings_action_ = tools_menu->addAction("&Settings...");
     connect(settings_action_, &QAction::triggered, this, &MainWindow::open_settings);
     auto* help_menu = menuBar()->addMenu("&Help");
@@ -2125,6 +2735,17 @@ void MainWindow::open_schema_tool() {
     schema_tool_dialog_->show();
     schema_tool_dialog_->raise();
     schema_tool_dialog_->activateWindow();
+}
+
+void MainWindow::open_compare_tool() {
+    if (compare_tool_dialog_ == nullptr) {
+        auto* dialog = new CompareToolDialog(this);
+        dialog->setAttribute(Qt::WA_DeleteOnClose, false);
+        compare_tool_dialog_ = dialog;
+    }
+    compare_tool_dialog_->show();
+    compare_tool_dialog_->raise();
+    compare_tool_dialog_->activateWindow();
 }
 
 void MainWindow::open_settings() {
@@ -3388,7 +4009,7 @@ void MainWindow::show_search_matches(const QString& summary, const QVector<qint6
 }
 
 void MainWindow::activate_search_result_item() {
-    if (search_results_tabs_ == nullptr || hex_view_ == nullptr || !hex_view_->has_document()) {
+    if (search_results_tabs_ == nullptr) {
         return;
     }
 
@@ -3409,6 +4030,11 @@ void MainWindow::activate_search_result_item() {
 
     const qint64 offset = offset_value.toLongLong();
     const qint64 match_length = item->data(1, Qt::UserRole).toLongLong();
+
+    if (hex_view_ == nullptr || !hex_view_->has_document()) {
+        return;
+    }
+
     if (match_length > 0) {
         hex_view_->select_range(offset, match_length);
     } else {

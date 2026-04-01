@@ -49,6 +49,12 @@ public:
         QString label;
     };
 
+    struct HighlightRange {
+        qint64 offset = 0;
+        qint64 length = 0;
+        QColor color;
+    };
+
     explicit HexView(QWidget* parent = nullptr);
 
     bool open_file(const QString& path);
@@ -115,6 +121,8 @@ public:
     void set_inspector_endian(InspectorEndian endian);
     QVector<InspectorRow> inspector_rows() const;
     bool apply_inspector_edit(const QString& section, const QString& field, const QString& value, QString* error_message = nullptr);
+    void set_highlight_ranges(const QVector<HighlightRange>& ranges);
+    void clear_highlight_ranges();
 
 signals:
     void status_changed(qulonglong caret_offset, qulonglong selection_size, qulonglong document_size);
@@ -212,6 +220,7 @@ private:
     QVector<InspectorRow> build_inspector_rows() const;
     QString format_inspector_text() const;
     QVector<AnalysisRow> build_analysis_rows(bool selection_only) const;
+    QColor highlight_color_for_offset(qint64 offset) const;
     static bool try_parse_hex_string(const QString& text, QByteArray& bytes);
     qint64 search_from(const QByteArray& pattern, qint64 start_offset, bool forward, qint64 range_start = -1, qint64 range_end = -1, const SearchProgressCallback& progress_callback = SearchProgressCallback()) const;
     void leaveEvent(QEvent* event) override;
@@ -241,4 +250,5 @@ private:
     int custom_row_number_width_ = -1;
     int custom_address_width_ = -1;
     HeaderDivider active_divider_ = HeaderDivider::None;
+    QVector<HighlightRange> highlight_ranges_;
 };
