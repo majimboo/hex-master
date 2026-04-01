@@ -445,7 +445,9 @@ public:
         root->setMenuBar(menu_bar);
         auto* file_menu = menu_bar->addMenu(QStringLiteral("&File"));
         auto* new_action = file_menu->addAction(QStringLiteral("&New Schema"));
+        new_action->setShortcut(QKeySequence::New);
         auto* open_action = file_menu->addAction(QStringLiteral("&Open Schema..."));
+        open_action->setShortcut(QKeySequence::Open);
         recent_menu_ = file_menu->addMenu(QStringLiteral("Open &Recent"));
         file_menu->addSeparator();
         auto* save_action = file_menu->addAction(QStringLiteral("&Save"));
@@ -454,6 +456,7 @@ public:
         save_as_action->setShortcut(QKeySequence::SaveAs);
         file_menu->addSeparator();
         auto* close_action = file_menu->addAction(QStringLiteral("&Close"));
+        close_action->setShortcut(QKeySequence::Close);
         auto* help_menu = menu_bar->addMenu(QStringLiteral("&Help"));
         auto* syntax_guide_action = help_menu->addAction(QStringLiteral("&Syntax Guide"));
 
@@ -503,6 +506,12 @@ public:
         syntax_timer_ = new QTimer(this);
         syntax_timer_->setSingleShot(true);
         syntax_timer_->setInterval(250);
+
+        const QList<QAction*> dialog_actions = {new_action, open_action, save_action, save_as_action, close_action};
+        for (QAction* action : dialog_actions) {
+            action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+            addAction(action);
+        }
 
         connect(new_action, &QAction::triggered, this, [this]() { new_schema(); });
         connect(open_action, &QAction::triggered, this, [this]() { open_schema(); });
@@ -1813,12 +1822,12 @@ void MainWindow::setup_menu() {
     previous_bookmark_action_->setShortcut(QKeySequence(QStringLiteral("Shift+F2")));
     connect(previous_bookmark_action_, &QAction::triggered, this, &MainWindow::previous_bookmark);
     auto* tools_menu = menuBar()->addMenu("&Tools");
-    compute_hashes_action_ = tools_menu->addAction("&Compute Hashes");
-    connect(compute_hashes_action_, &QAction::triggered, this, &MainWindow::compute_hashes);
-    schema_tool_action_ = tools_menu->addAction("Schema &Editor...");
+    schema_tool_action_ = tools_menu->addAction("&Schema Editor...");
     connect(schema_tool_action_, &QAction::triggered, this, &MainWindow::open_schema_tool);
     compare_tool_action_ = tools_menu->addAction("&Compare Files...");
     connect(compare_tool_action_, &QAction::triggered, this, &MainWindow::open_compare_tool);
+    compute_hashes_action_ = tools_menu->addAction("Co&mpute Hashes");
+    connect(compute_hashes_action_, &QAction::triggered, this, &MainWindow::compute_hashes);
     settings_action_ = tools_menu->addAction("&Settings...");
     connect(settings_action_, &QAction::triggered, this, &MainWindow::open_settings);
     auto* help_menu = menuBar()->addMenu("&Help");
