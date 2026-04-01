@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Hex Master Schema Guide</title>
+    <meta name="description" content="Schema DSL guide for Hex Master, including syntax, arrays, offsets, and example binary structure definitions.">
+    <link rel="stylesheet" href="site.css">
+</head>
+<body>
+    <div class="page">
+        <header class="topbar">
+            <a class="brand" href="index.html">
+                <img src="assets/brand/appicon.png" alt="Hex Master logo">
+                <span>Hex Master</span>
+            </a>
+            <nav class="nav" aria-label="Primary">
+                <a href="index.html">Home</a>
+                <a href="#syntax">Syntax</a>
+                <a href="#examples">Examples</a>
+                <a href="#rules">Rules</a>
+            </nav>
+        </header>
+
+        <main>
+            <section class="hero" id="overview">
+                <div class="hero-copy">
+                    <p class="eyebrow">Schema Guide</p>
+                    <h1>Describe binary structures with a compact DSL.</h1>
+                    <p class="lead">
+                        Hex Master schemas define endianness, named structs, arrays, and offset-based fields.
+                        Apply a schema at a base offset to parse binary data into a structured tree.
+                    </p>
+                </div>
+
+                <div class="hero-meta">
+                    <div class="meta-row">
+                        <span>File type</span>
+                        <strong><code>.hms</code></strong>
+                    </div>
+                    <div class="meta-row">
+                        <span>Editor</span>
+                        <strong>Tools &gt; Schema Editor...</strong>
+                    </div>
+                    <div class="meta-row">
+                        <span>Output</span>
+                        <strong>Structured field tree with offsets and sizes</strong>
+                    </div>
+                </div>
+            </section>
+
+            <section class="feature-section" id="syntax">
+                <div class="section-intro">
+                    <p class="eyebrow">Syntax</p>
+                    <h2>Core schema shape</h2>
+                </div>
+
+                <div class="engineering-copy">
+                    <p>Every schema has an endianness, zero or more named structs, and one root struct.</p>
+                </div>
+
+<pre class="schema-code"><code>endian little
+
+struct Entry {
+  u32 id
+  u16 flags
+  u16 value
+}
+
+root Header {
+  bytes[4] magic
+  u16 version
+  u16 entry_count
+  Entry[entry_count] entries
+}</code></pre>
+            </section>
+
+            <section class="feature-section" id="examples">
+                <div class="section-intro">
+                    <p class="eyebrow">Examples</p>
+                    <h2>Arrays and offset-based fields</h2>
+                </div>
+
+<pre class="schema-code"><code>endian little
+
+struct Entry {
+  u32 id
+  u16 flags
+  u16 value
+}
+
+root Header {
+  bytes[4] magic
+  u16 version
+  u16 entry_count
+  u32 entries_offset
+  Entry[entry_count] entries @entries_offset
+}</code></pre>
+
+                <div class="engineering-copy">
+                    <p>
+                        In this example, <code>entries</code> is an array of <code>Entry</code> records.
+                        The array length comes from the earlier <code>entry_count</code> field, and the array
+                        starts at the offset stored in <code>entries_offset</code>.
+                    </p>
+                </div>
+            </section>
+
+            <section class="feature-section" id="rules">
+                <div class="section-intro">
+                    <p class="eyebrow">Rules</p>
+                    <h2>Supported constructs</h2>
+                </div>
+
+                <div class="feature-grid">
+                    <section>
+                        <h3>Scalars</h3>
+                        <ul>
+                            <li><code>u8</code>, <code>u16</code>, <code>u32</code>, <code>u64</code></li>
+                            <li><code>i8</code>, <code>i16</code>, <code>i32</code>, <code>i64</code></li>
+                            <li><code>f32</code>, <code>f64</code></li>
+                        </ul>
+                    </section>
+                    <section>
+                        <h3>Containers</h3>
+                        <ul>
+                            <li>Named <code>struct</code> blocks</li>
+                            <li>One <code>root</code> block</li>
+                            <li>Byte arrays with <code>bytes[n]</code></li>
+                            <li>Struct arrays with <code>Type[count]</code></li>
+                        </ul>
+                    </section>
+                    <section>
+                        <h3>References</h3>
+                        <ul>
+                            <li>Array counts can use an earlier scalar field</li>
+                            <li>Fields can start at an earlier scalar offset using <code>@field_name</code></li>
+                            <li>Base offset is supplied when running the schema</li>
+                        </ul>
+                    </section>
+                </div>
+
+                <div class="engineering-copy">
+                    <p>
+                        The current DSL is intentionally small. It does not yet support dotted paths,
+                        unions, conditionals, or complex expressions. Keep dependent fields defined after
+                        the scalar values they depend on.
+                    </p>
+                </div>
+            </section>
+        </main>
+    </div>
+</body>
+</html>

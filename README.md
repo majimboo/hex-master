@@ -87,37 +87,6 @@ Rust-only build:
 .\scripts\build.ps1 -SkipQt
 ```
 
-## Versioning
-
-Hex Master follows semantic versioning.
-
-- `MAJOR`: breaking changes
-- `MINOR`: backward-compatible features
-- `PATCH`: backward-compatible fixes and polish
-
-## Release Process
-
-Recommended release flow:
-
-1. bump the version in `apps/desktop/CMakeLists.txt`
-2. commit the version change
-3. create and push a matching tag such as `v1.0.1`
-4. GitHub Actions builds and publishes the release archive
-
-## Automation
-
-This repository includes:
-
-- CI workflow for Rust tests and Windows Qt build
-- release workflow for tagged Windows artifacts
-- Pages deployment workflow for the public landing page
-
-Workflow files:
-
-- [.github/workflows/ci.yml](.github/workflows/ci.yml)
-- [.github/workflows/release.yml](.github/workflows/release.yml)
-- [.github/workflows/pages.yml](.github/workflows/pages.yml)
-
 ## License
 
 This project is licensed under the MIT License. See [LICENSE](LICENSE).

@@ -56,6 +56,7 @@ public:
     QString document_title() const;
     QString document_path() const;
     qint64 document_size() const;
+    qint64 caret_offset() const;
     qint64 bytes_per_row() const;
     void set_bytes_per_row(qint64 bytes_per_row);
     void go_to_offset(qint64 offset);

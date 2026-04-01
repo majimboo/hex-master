@@ -10,6 +10,7 @@ class QDockWidget;
 class QLabel;
 class QAction;
 class QComboBox;
+class QDialog;
 class QTreeWidget;
 class QTreeWidgetItem;
 class QCloseEvent;
@@ -109,6 +110,7 @@ private:
     void paste_hex();
     void fill_selection();
     void compute_hashes();
+    void open_schema_tool();
     void open_settings();
     void show_about();
     void set_insert_mode();
@@ -181,6 +183,7 @@ private:
     QTabWidget* search_results_tabs_ = nullptr;
     QTreeWidget* analysis_tree_ = nullptr;
     QLabel* status_label_ = nullptr;
+    QDialog* schema_tool_dialog_ = nullptr;
     QToolBar* toolbar_ = nullptr;
     QWidget* edit_mode_toggle_ = nullptr;
     QComboBox* goto_offset_edit_ = nullptr;
@@ -197,6 +200,7 @@ private:
     QAction* paste_hex_action_ = nullptr;
     QAction* fill_selection_action_ = nullptr;
     QAction* compute_hashes_action_ = nullptr;
+    QAction* schema_tool_action_ = nullptr;
     QAction* settings_action_ = nullptr;
     QAction* insert_mode_action_ = nullptr;
     QAction* overwrite_mode_action_ = nullptr;

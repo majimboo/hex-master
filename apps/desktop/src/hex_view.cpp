@@ -181,6 +181,10 @@ qint64 HexView::document_size() const {
     return source_.size();
 }
 
+qint64 HexView::caret_offset() const {
+    return caret_offset_;
+}
+
 qint64 HexView::bytes_per_row() const {
     return bytes_per_row_;
 }

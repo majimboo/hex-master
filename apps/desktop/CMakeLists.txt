@@ -38,10 +38,12 @@ qt_add_executable(hex_master_qt_shell WIN32
     src/hex_view.cpp
     src/main.cpp
     src/main_window.cpp
+    src/structure_schema.cpp
     include/file_byte_source.hpp
     include/hex_bridge.h
     include/hex_view.hpp
     include/main_window.hpp
+    include/structure_schema.hpp
 )
 
 target_include_directories(hex_master_qt_shell PRIVATE include)

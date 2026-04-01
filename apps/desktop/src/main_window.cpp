@@ -1,6 +1,7 @@
 #include "main_window.hpp"
 
 #include "hex_view.hpp"
+#include "structure_schema.hpp"
 
 #include <QApplication>
 #include <QAction>
@@ -21,30 +22,52 @@
 #include <QDialogButtonBox>
 #include <QCheckBox>
 #include <QColorDialog>
+#include <QDesktopServices>
 #include <QGroupBox>
 #include <QFormLayout>
 #include <QComboBox>
 #include <QElapsedTimer>
 #include <QProgressDialog>
+#include <QPushButton>
 #include <QStackedWidget>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QPalette>
 #include <QPainter>
+#include <QPlainTextEdit>
+#include <QScrollBar>
 #include <QSettings>
 #include <QStatusBar>
 #include <QStyleOptionButton>
 #include <QTabWidget>
+#include <QTextBlock>
 #include <QTextEdit>
 #include <QTreeWidget>
 #include <QHeaderView>
 #include <QStyledItemDelegate>
+#include <QSplitter>
+#include <QTimer>
 #include <QToolBar>
+#include <QUrl>
 #include <QWidget>
 
 #include <limits>
 
 namespace {
+class SchemaCodeEditor;
+
+class SchemaLineNumberArea final : public QWidget {
+public:
+    explicit SchemaLineNumberArea(QWidget* parent, SchemaCodeEditor* editor) : QWidget(parent), editor_(editor) {}
+    QSize sizeHint() const override;
+
+protected:
+    void paintEvent(QPaintEvent* event) override;
+
+private:
+    SchemaCodeEditor* editor_;
+};
+
 class TreeValueDelegate final : public QStyledItemDelegate {
 public:
     using QStyledItemDelegate::QStyledItemDelegate;
@@ -261,6 +284,486 @@ private:
     int hovered_segment_ = -1;
     int pressed_segment_ = -1;
 };
+
+class SchemaCodeEditor final : public QPlainTextEdit {
+public:
+    explicit SchemaCodeEditor(QWidget* parent = nullptr) : QPlainTextEdit(parent), line_number_area_(new SchemaLineNumberArea(this, this)) {
+        connect(this, &QPlainTextEdit::blockCountChanged, this, &SchemaCodeEditor::update_line_number_area_width);
+        connect(this, &QPlainTextEdit::updateRequest, this, &SchemaCodeEditor::update_line_number_area);
+        connect(this, &QPlainTextEdit::cursorPositionChanged, this, &SchemaCodeEditor::highlight_current_line);
+        update_line_number_area_width(0);
+        highlight_current_line();
+    }
+
+    int line_number_area_width() const {
+        int digits = 1;
+        int max_value = qMax(1, blockCount());
+        while (max_value >= 10) {
+            max_value /= 10;
+            ++digits;
+        }
+        return 12 + fontMetrics().horizontalAdvance(QLatin1Char('9')) * digits;
+    }
+
+    void set_error_line(int line_number) {
+        error_line_ = line_number;
+        highlight_current_line();
+    }
+
+protected:
+    void resizeEvent(QResizeEvent* event) override {
+        QPlainTextEdit::resizeEvent(event);
+        const QRect contents = contentsRect();
+        line_number_area_->setGeometry(QRect(contents.left(), contents.top(), line_number_area_width(), contents.height()));
+    }
+
+private:
+    void update_line_number_area_width(int) {
+        setViewportMargins(line_number_area_width(), 0, 0, 0);
+    }
+
+    void update_line_number_area(const QRect& rect, int dy) {
+        if (dy != 0) {
+            line_number_area_->scroll(0, dy);
+        } else {
+            line_number_area_->update(0, rect.y(), line_number_area_->width(), rect.height());
+        }
+
+        if (rect.contains(viewport()->rect())) {
+            update_line_number_area_width(0);
+        }
+    }
+
+    void highlight_current_line() {
+        QList<QTextEdit::ExtraSelection> selections;
+
+        QTextEdit::ExtraSelection current_line_selection;
+        current_line_selection.format.setBackground(QColor(245, 240, 230));
+        current_line_selection.format.setProperty(QTextFormat::FullWidthSelection, true);
+        current_line_selection.cursor = textCursor();
+        current_line_selection.cursor.clearSelection();
+        selections.push_back(current_line_selection);
+
+        if (error_line_ > 0) {
+            QTextBlock block = document()->findBlockByNumber(error_line_ - 1);
+            if (block.isValid()) {
+                QTextCursor error_cursor(block);
+                QTextEdit::ExtraSelection error_selection;
+                error_selection.cursor = error_cursor;
+                error_selection.format.setBackground(QColor(255, 233, 233));
+                error_selection.format.setProperty(QTextFormat::FullWidthSelection, true);
+                selections.push_back(error_selection);
+            }
+        }
+
+        setExtraSelections(selections);
+    }
+
+    void paint_line_number_area(QPaintEvent* event) {
+        QPainter painter(line_number_area_);
+        painter.fillRect(event->rect(), QColor(246, 241, 233));
+        painter.setPen(QColor(122, 113, 99));
+
+        QTextBlock block = firstVisibleBlock();
+        int block_number = block.blockNumber();
+        int top = qRound(blockBoundingGeometry(block).translated(contentOffset()).top());
+        int bottom = top + qRound(blockBoundingRect(block).height());
+
+        while (block.isValid() && top <= event->rect().bottom()) {
+            if (block.isVisible() && bottom >= event->rect().top()) {
+                const QString number = QString::number(block_number + 1);
+                painter.drawText(0, top, line_number_area_->width() - 6, fontMetrics().height(), Qt::AlignRight, number);
+            }
+
+            block = block.next();
+            top = bottom;
+            bottom = top + qRound(blockBoundingRect(block).height());
+            ++block_number;
+        }
+    }
+
+    QWidget* line_number_area_;
+    int error_line_ = -1;
+
+    friend class SchemaLineNumberArea;
+};
+
+QSize SchemaLineNumberArea::sizeHint() const {
+    return QSize(editor_->line_number_area_width(), 0);
+}
+
+void SchemaLineNumberArea::paintEvent(QPaintEvent* event) {
+    editor_->paint_line_number_area(event);
+}
+
+class SchemaToolDialog final : public QDialog {
+public:
+    SchemaToolDialog(HexView* hex_view, QWidget* parent = nullptr)
+        : QDialog(parent), hex_view_(hex_view) {
+        setWindowTitle(QStringLiteral("Schema Editor"));
+        resize(1080, 720);
+
+        auto* root = new QVBoxLayout(this);
+        auto* menu_bar = new QMenuBar(this);
+        root->setMenuBar(menu_bar);
+        auto* file_menu = menu_bar->addMenu(QStringLiteral("&File"));
+        auto* new_action = file_menu->addAction(QStringLiteral("&New Schema"));
+        auto* open_action = file_menu->addAction(QStringLiteral("&Open Schema..."));
+        recent_menu_ = file_menu->addMenu(QStringLiteral("Open &Recent"));
+        file_menu->addSeparator();
+        auto* save_action = file_menu->addAction(QStringLiteral("&Save"));
+        auto* save_as_action = file_menu->addAction(QStringLiteral("Save &As..."));
+        file_menu->addSeparator();
+        auto* close_action = file_menu->addAction(QStringLiteral("&Close"));
+        auto* help_menu = menu_bar->addMenu(QStringLiteral("&Help"));
+        auto* syntax_guide_action = help_menu->addAction(QStringLiteral("&Syntax Guide"));
+
+        auto* toolbar = new QHBoxLayout();
+        root->addLayout(toolbar);
+
+        auto* run_button = new QPushButton(QStringLiteral("Run"), this);
+        base_offset_edit_ = new QLineEdit(this);
+        base_offset_edit_->setPlaceholderText(QStringLiteral("0x0"));
+        base_offset_edit_->setMaximumWidth(160);
+        toolbar->addWidget(new QLabel(QStringLiteral("Base Offset"), this));
+        toolbar->addWidget(base_offset_edit_);
+        toolbar->addWidget(run_button);
+        toolbar->addStretch(1);
+
+        auto* splitter = new QSplitter(Qt::Horizontal, this);
+        root->addWidget(splitter, 1);
+
+        editor_ = new SchemaCodeEditor(splitter);
+        editor_->setPlaceholderText(QStringLiteral("Write a schema DSL here."));
+        editor_->setPlainText(StructureSchema::default_schema_template());
+        structure_tree_ = new QTreeWidget(splitter);
+        structure_tree_->setRootIsDecorated(true);
+        structure_tree_->setAlternatingRowColors(true);
+        structure_tree_->setUniformRowHeights(true);
+        structure_tree_->setColumnCount(5);
+        structure_tree_->setHeaderLabels({
+            QStringLiteral("Field"),
+            QStringLiteral("Type"),
+            QStringLiteral("Value"),
+            QStringLiteral("Offset"),
+            QStringLiteral("Size")});
+        structure_tree_->header()->setStretchLastSection(false);
+        structure_tree_->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+        structure_tree_->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+        structure_tree_->header()->setSectionResizeMode(2, QHeaderView::Stretch);
+        structure_tree_->header()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+        structure_tree_->header()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
+        splitter->setStretchFactor(0, 0);
+        splitter->setStretchFactor(1, 1);
+        splitter->setSizes({420, 620});
+
+        status_label_ = new QLabel(QStringLiteral("Ready."), this);
+        status_label_->setWordWrap(true);
+        root->addWidget(status_label_);
+
+        syntax_timer_ = new QTimer(this);
+        syntax_timer_->setSingleShot(true);
+        syntax_timer_->setInterval(250);
+
+        connect(new_action, &QAction::triggered, this, [this]() { new_schema(); });
+        connect(open_action, &QAction::triggered, this, [this]() { open_schema(); });
+        connect(save_action, &QAction::triggered, this, [this]() { save_schema(); });
+        connect(save_as_action, &QAction::triggered, this, [this]() { save_schema_as(); });
+        connect(close_action, &QAction::triggered, this, &QDialog::close);
+        connect(syntax_guide_action, &QAction::triggered, this, [this]() {
+            if (!QDesktopServices::openUrl(QUrl(QStringLiteral("https://majimboo.github.io/hex-master/schema-guide.html")))) {
+                set_status(QStringLiteral("Failed to open the schema guide link."), true);
+            }
+        });
+        connect(run_button, &QPushButton::clicked, this, [this]() { apply_schema(); });
+        connect(editor_, &QPlainTextEdit::textChanged, this, [this]() { syntax_timer_->start(); });
+        connect(syntax_timer_, &QTimer::timeout, this, [this]() { validate_schema(); });
+        connect(structure_tree_, &QTreeWidget::itemActivated, this, [this](QTreeWidgetItem*, int) { activate_item(); });
+        connect(structure_tree_, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem*, int) { activate_item(); });
+
+        refresh_recent_menu();
+    }
+
+    void load_from_settings() {
+        QSettings settings;
+        current_path_ = settings.value(QStringLiteral("schema/path")).toString();
+        recent_files_ = settings.value(QStringLiteral("schema/recentFiles")).toStringList();
+        QString schema_text = settings.value(QStringLiteral("schema/text")).toString();
+        if (schema_text.trimmed().isEmpty()) {
+            schema_text = StructureSchema::default_schema_template();
+        }
+        editor_->setPlainText(schema_text);
+        const QString offset = settings.value(QStringLiteral("schema/lastOffset"), QStringLiteral("0x0")).toString();
+        base_offset_edit_->setText(offset);
+        update_window_title();
+        refresh_recent_menu();
+        validate_schema();
+    }
+
+    void save_to_settings() const {
+        QSettings settings;
+        settings.setValue(QStringLiteral("schema/path"), current_path_);
+        settings.setValue(QStringLiteral("schema/recentFiles"), recent_files_);
+        settings.setValue(QStringLiteral("schema/text"), editor_->toPlainText());
+        settings.setValue(QStringLiteral("schema/lastOffset"), base_offset_edit_->text().trimmed());
+    }
+
+private:
+    static QString schema_file_filter() {
+        return QStringLiteral("Hex Master Schema (*.hms);;All Files (*)");
+    }
+
+    static bool try_parse_offset_text(const QString& text, quint64& value) {
+        QString normalized = text.trimmed();
+        if (normalized.isEmpty()) {
+            return false;
+        }
+        int base = 10;
+        if (normalized.startsWith(QStringLiteral("0x"), Qt::CaseInsensitive)) {
+            normalized = normalized.mid(2);
+            base = 16;
+        }
+        bool ok = false;
+        value = normalized.toULongLong(&ok, base);
+        return ok;
+    }
+
+    void set_status(const QString& text, bool error = false) {
+        status_label_->setText(text);
+        status_label_->setStyleSheet(error ? QStringLiteral("color: #8b1e1e;") : QString());
+    }
+
+    int error_line_from_message(const QString& message) const {
+        const QRegularExpression re(QStringLiteral(R"(^Line\s+(\d+):)"));
+        const auto match = re.match(message);
+        return match.hasMatch() ? match.captured(1).toInt() : -1;
+    }
+
+    void validate_schema() {
+        StructureSchema::SchemaDefinition schema;
+        QString error_message;
+        if (StructureSchema::parse_schema(editor_->toPlainText(), schema, &error_message)) {
+            editor_->set_error_line(-1);
+            set_status(QStringLiteral("Schema is valid."));
+        } else {
+            editor_->set_error_line(error_line_from_message(error_message));
+            set_status(error_message, true);
+        }
+    }
+
+    void new_schema() {
+        editor_->setPlainText(StructureSchema::default_schema_template());
+        current_path_.clear();
+        base_offset_edit_->setText(QStringLiteral("0x0"));
+        update_window_title();
+        validate_schema();
+    }
+
+    void refresh_recent_menu() {
+        if (recent_menu_ == nullptr) {
+            return;
+        }
+        recent_menu_->clear();
+        int visible_count = 0;
+        for (const QString& path : recent_files_) {
+            if (!QFileInfo::exists(path)) {
+                continue;
+            }
+            auto* action = recent_menu_->addAction(QFileInfo(path).fileName());
+            action->setData(path);
+            action->setToolTip(path);
+            connect(action, &QAction::triggered, this, [this, action]() {
+                open_schema_from_path(action->data().toString());
+            });
+            ++visible_count;
+            if (visible_count >= 10) {
+                break;
+            }
+        }
+        if (visible_count == 0) {
+            auto* empty_action = recent_menu_->addAction(QStringLiteral("No Recent Schemas"));
+            empty_action->setEnabled(false);
+        } else {
+            recent_menu_->addSeparator();
+            auto* clear_action = recent_menu_->addAction(QStringLiteral("Clear Recent"));
+            connect(clear_action, &QAction::triggered, this, [this]() {
+                recent_files_.clear();
+                refresh_recent_menu();
+            });
+        }
+    }
+
+    void add_recent_file(const QString& path) {
+        if (path.isEmpty()) {
+            return;
+        }
+        recent_files_.removeAll(path);
+        recent_files_.prepend(path);
+        while (recent_files_.size() > 10) {
+            recent_files_.removeLast();
+        }
+        refresh_recent_menu();
+    }
+
+    bool open_schema_from_path(const QString& path) {
+        if (path.isEmpty()) {
+            return false;
+        }
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            recent_files_.removeAll(path);
+            refresh_recent_menu();
+            set_status(QStringLiteral("Failed to open schema."), true);
+            return false;
+        }
+        editor_->setPlainText(QString::fromUtf8(file.readAll()));
+        current_path_ = path;
+        add_recent_file(path);
+        update_window_title();
+        validate_schema();
+        set_status(QStringLiteral("Opened schema %1").arg(QFileInfo(path).fileName()));
+        return true;
+    }
+
+    void open_schema() {
+        const QString start_dir = current_path_.isEmpty() ? QString() : QFileInfo(current_path_).absolutePath();
+        const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Open Schema"), start_dir, schema_file_filter());
+        if (path.isEmpty()) {
+            return;
+        }
+        open_schema_from_path(path);
+    }
+
+    bool save_schema_to(const QString& path) {
+        QFile file(path);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
+            set_status(QStringLiteral("Failed to save schema."), true);
+            return false;
+        }
+        const QByteArray bytes = editor_->toPlainText().toUtf8();
+        if (file.write(bytes) != bytes.size()) {
+            set_status(QStringLiteral("Failed to save schema."), true);
+            return false;
+        }
+        current_path_ = path;
+        add_recent_file(path);
+        update_window_title();
+        set_status(QStringLiteral("Saved schema %1").arg(QFileInfo(path).fileName()));
+        return true;
+    }
+
+    void save_schema() {
+        if (current_path_.isEmpty()) {
+            save_schema_as();
+            return;
+        }
+        save_schema_to(current_path_);
+    }
+
+    void save_schema_as() {
+        const QString path = QFileDialog::getSaveFileName(
+            this,
+            QStringLiteral("Save Schema As"),
+            current_path_.isEmpty() ? QStringLiteral("schema.hms") : QFileInfo(current_path_).fileName(),
+            schema_file_filter());
+        if (path.isEmpty()) {
+            return;
+        }
+        save_schema_to(path);
+    }
+
+    void append_node(QTreeWidgetItem* parent, const StructureSchema::ParsedNode& node) {
+        const QString offset_value = QStringLiteral("0x%1").arg(node.offset, 0, 16).toUpper();
+        const QString size_value = QString::number(node.size);
+        auto* item = parent == nullptr
+            ? new QTreeWidgetItem(structure_tree_, QStringList{node.name, node.type_name, node.value, offset_value, size_value})
+            : new QTreeWidgetItem(parent, QStringList{node.name, node.type_name, node.value, offset_value, size_value});
+        item->setData(0, Qt::UserRole, node.offset);
+        item->setData(1, Qt::UserRole, node.size);
+        for (const auto& child : node.children) {
+            append_node(item, child);
+        }
+    }
+
+    void update_window_title() {
+        if (current_path_.isEmpty()) {
+            setWindowTitle(QStringLiteral("Schema Editor"));
+            return;
+        }
+        setWindowTitle(QStringLiteral("Schema Editor - %1").arg(QFileInfo(current_path_).fileName()));
+    }
+
+    void apply_schema() {
+        if (hex_view_ == nullptr || !hex_view_->has_document()) {
+            set_status(QStringLiteral("Open a file before applying a schema."), true);
+            return;
+        }
+
+        StructureSchema::SchemaDefinition schema;
+        QString error_message;
+        if (!StructureSchema::parse_schema(editor_->toPlainText(), schema, &error_message)) {
+            editor_->set_error_line(error_line_from_message(error_message));
+            set_status(error_message, true);
+            return;
+        }
+
+        quint64 base_offset = 0;
+        if (!try_parse_offset_text(base_offset_edit_->text().trimmed().isEmpty() ? QStringLiteral("0x%1").arg(hex_view_->caret_offset(), 0, 16) : base_offset_edit_->text(), base_offset)) {
+            set_status(QStringLiteral("Invalid base offset."), true);
+            return;
+        }
+
+        StructureSchema::ParsedNode root_node;
+        if (!StructureSchema::evaluate_schema(
+                schema,
+                static_cast<qint64>(base_offset),
+                hex_view_->document_size(),
+                [this](qint64 start, qint64 length) { return hex_view_->read_bytes(start, length); },
+                root_node,
+                &error_message)) {
+            structure_tree_->clear();
+            editor_->set_error_line(error_line_from_message(error_message));
+            set_status(error_message, true);
+            return;
+        }
+
+        editor_->set_error_line(-1);
+        structure_tree_->clear();
+        append_node(nullptr, root_node);
+        structure_tree_->expandToDepth(1);
+        set_status(QStringLiteral("Applied schema `%1` at 0x%2").arg(schema.root_name).arg(base_offset, 0, 16));
+    }
+
+    void activate_item() {
+        if (hex_view_ == nullptr) {
+            return;
+        }
+        QTreeWidgetItem* item = structure_tree_->currentItem();
+        if (item == nullptr) {
+            return;
+        }
+        const qint64 offset = item->data(0, Qt::UserRole).toLongLong();
+        const qint64 size = item->data(1, Qt::UserRole).toLongLong();
+        if (size > 0) {
+            hex_view_->select_range(offset, size);
+        }
+    }
+
+    void closeEvent(QCloseEvent* event) override {
+        save_to_settings();
+        QDialog::closeEvent(event);
+    }
+
+    HexView* hex_view_ = nullptr;
+    SchemaCodeEditor* editor_ = nullptr;
+    QTreeWidget* structure_tree_ = nullptr;
+    QLineEdit* base_offset_edit_ = nullptr;
+    QLabel* status_label_ = nullptr;
+    QTimer* syntax_timer_ = nullptr;
+    QMenu* recent_menu_ = nullptr;
+    QString current_path_;
+    QStringList recent_files_;
+};
 }
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
@@ -381,6 +884,8 @@ void MainWindow::setup_menu() {
     auto* tools_menu = menuBar()->addMenu("&Tools");
     compute_hashes_action_ = tools_menu->addAction("&Compute Hashes");
     connect(compute_hashes_action_, &QAction::triggered, this, &MainWindow::compute_hashes);
+    schema_tool_action_ = tools_menu->addAction("Schema &Editor...");
+    connect(schema_tool_action_, &QAction::triggered, this, &MainWindow::open_schema_tool);
     settings_action_ = tools_menu->addAction("&Settings...");
     connect(settings_action_, &QAction::triggered, this, &MainWindow::open_settings);
     auto* help_menu = menuBar()->addMenu("&Help");
@@ -466,7 +971,6 @@ void MainWindow::restore_session() {
     last_replace_selection_only_ = settings.value(QStringLiteral("replace/lastSelectionOnly"), false).toBool();
     update_recent_files_menu();
     refresh_goto_offset_widgets();
-
     restoreGeometry(settings.value(QStringLiteral("window/geometry")).toByteArray());
     restoreState(settings.value(QStringLiteral("window/state")).toByteArray());
 
@@ -503,6 +1007,9 @@ void MainWindow::restore_session() {
 
 void MainWindow::save_session() const {
     QSettings settings;
+    if (schema_tool_dialog_ != nullptr) {
+        static_cast<SchemaToolDialog*>(schema_tool_dialog_)->save_to_settings();
+    }
     settings.setValue(QStringLiteral("recentFiles"), recent_files_);
     settings.setValue(QStringLiteral("gotoOffsetHistory"), goto_offset_history_);
     settings.setValue(QStringLiteral("search/history"), search_history_);
@@ -921,6 +1428,9 @@ void MainWindow::closeEvent(QCloseEvent* event) {
         return;
     }
 
+    if (schema_tool_dialog_ != nullptr) {
+        static_cast<SchemaToolDialog*>(schema_tool_dialog_)->save_to_settings();
+    }
     save_session();
     QMainWindow::closeEvent(event);
 }
@@ -1161,6 +1671,7 @@ void MainWindow::setup_docks() {
     addDockWidget(Qt::RightDockWidgetArea, analysis_dock_);
     tabifyDockWidget(inspector_dock_, analysis_dock_);
     update_analysis_view(false);
+
 }
 
 void MainWindow::setup_status_bar() {
@@ -1442,6 +1953,18 @@ void MainWindow::compute_hashes() {
     statusBar()->showMessage(QStringLiteral("Computed hashes%1.")
                                  .arg(selection_only ? QStringLiteral(" for the selection") : QStringLiteral(" for the document")),
         3000);
+}
+
+void MainWindow::open_schema_tool() {
+    if (schema_tool_dialog_ == nullptr) {
+        auto* dialog = new SchemaToolDialog(hex_view_, this);
+        dialog->setAttribute(Qt::WA_DeleteOnClose, false);
+        dialog->load_from_settings();
+        schema_tool_dialog_ = dialog;
+    }
+    schema_tool_dialog_->show();
+    schema_tool_dialog_->raise();
+    schema_tool_dialog_->activateWindow();
 }
 
 void MainWindow::open_settings() {
