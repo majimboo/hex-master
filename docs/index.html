@@ -4,76 +4,150 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Hex Master</title>
-    <meta name="description" content="Hex Master is a Windows-first hex editor and binary file editor built for inspecting and editing large binary files, including multi-GB data sets.">
+    <meta name="description" content="Hex Master is a Windows-first hex editor for inspecting, searching, and editing binary files, including large multi-GB data sets.">
     <link rel="stylesheet" href="site.css">
 </head>
 <body>
-    <main class="shell">
-        <section class="hero">
-            <p class="eyebrow">Windows-First Hex Editor</p>
-            <h1>Hex Master</h1>
-            <p class="subhead">
-                A keyboard-friendly desktop hex editor with structural editing, typed inspection,
-                byte-pattern search, and efficient handling of large binary files through a Rust core behind a Qt shell.
-            </p>
-            <div class="actions">
-                <a class="button primary" id="download-link" href="#">Download Latest</a>
-                <a class="button" id="release-link" href="#">Releases</a>
-                <a class="button" id="repo-link" href="#">Repository</a>
-            </div>
-            <p class="download-note">
-                Download the Windows zip release, extract it, and run <code>HexMaster.exe</code>.
-            </p>
-        </section>
+    <div class="page">
+        <header class="topbar">
+            <a class="brand" href="#">
+                <img src="assets/brand/appicon.png" alt="Hex Master logo">
+                <span>Hex Master</span>
+            </a>
+            <nav class="nav" aria-label="Primary">
+                <a href="#overview">Overview</a>
+                <a href="#features">Features</a>
+                <a href="#engineering">Engineering</a>
+                <a href="#download">Download</a>
+            </nav>
+        </header>
 
-        <section class="showcase">
-            <div class="showcase-copy">
-                <p class="eyebrow">Desktop Interface</p>
-                <h2>Main Editor View</h2>
-                <p class="subhead">
-                    Hex Master keeps the classic offset, hex, and text layout, but adds structured search,
-                    typed inspection, hashes, and modern release automation around it.
-                </p>
-            </div>
-            <figure class="shot-card">
-                <img src="assets/screenshots/hexmaster-main-window.png" alt="Hex Master main editor window screenshot">
-            </figure>
-        </section>
+        <main>
+            <section class="hero" id="overview">
+                <div class="hero-copy">
+                    <p class="eyebrow">High-Performance Hex Editor</p>
+                    <h1>Hex editing for real binary work.</h1>
+                    <p class="lead">
+                        Hex Master is a desktop editor for binary data, executable files, firmware images,
+                        save files, and other raw byte-oriented formats. It keeps the classic offset, hex,
+                        and text workflow, then adds stronger search, typed inspection, and better large-file handling.
+                    </p>
+                    <div class="actions" id="download">
+                        <a class="button primary" id="download-link" href="#">Download Latest</a>
+                        <a class="button" id="release-link" href="#">Releases</a>
+                        <a class="button" id="repo-link" href="#">Repository</a>
+                    </div>
+                    <p class="note">
+                        Download the Windows zip release, extract it, and run <code>HexMaster.exe</code>.
+                    </p>
+                </div>
 
-        <section class="grid">
-            <article class="card">
-                <h2>Current Feature Set</h2>
-                <ul>
-                    <li>Hex and text-side editing with insert and overwrite modes</li>
-                    <li>Find next, find all, typed-value search, and structured replace</li>
-                    <li>Inspector dock with grouped numeric and time interpretations</li>
-                    <li>Efficient browsing and saving for large binary files and multi-GB data sets</li>
-                    <li>Bookmarks, hashes, session restore, and recent files</li>
-                </ul>
-            </article>
-            <article class="card">
-                <h2>Release Model</h2>
-                <ul>
-                    <li>Semantic versioning from a single CMake version source</li>
-                    <li>GitHub Actions CI for Windows build and Rust tests</li>
-                    <li>Tagged releases publish downloadable Windows archives</li>
-                    <li>GitHub Pages provides a lightweight public landing page</li>
-                </ul>
-            </article>
-            <article class="card">
-                <h2>Created By</h2>
-                <ul>
-                    <li>Majid Siddiqui</li>
-                    <li><a href="mailto:me@majidarif.com">me@majidarif.com</a></li>
-                    <li>2026</li>
-                </ul>
-            </article>
-        </section>
+                <div class="hero-meta">
+                    <div class="meta-row">
+                        <span>Primary target</span>
+                        <strong>Windows desktop</strong>
+                    </div>
+                    <div class="meta-row">
+                        <span>Editing model</span>
+                        <strong>Hex and text-side editing</strong>
+                    </div>
+                    <div class="meta-row">
+                        <span>Search modes</span>
+                        <strong>Text, hex, and typed values</strong>
+                    </div>
+                    <div class="meta-row">
+                        <span>Large-file focus</span>
+                        <strong>Multi-GB browsing, search, and save</strong>
+                    </div>
+                </div>
+            </section>
 
-        <p class="footer">
-            For build notes, roadmap, and technical documentation, browse the repository documents and release notes.
-        </p>
-    </main>
+            <section class="shot-section">
+                <div class="section-intro">
+                    <p class="eyebrow">Interface</p>
+                    <h2>A familiar layout with stronger search, replace, and inspection tools.</h2>
+                </div>
+                <figure class="shot-frame">
+                    <img src="assets/screenshots/hexmaster-main-window.png" alt="Hex Master main editor window screenshot">
+                </figure>
+            </section>
+
+            <section class="feature-section" id="features">
+                <div class="section-intro">
+                    <p class="eyebrow">Features</p>
+                    <h2>Built around the workflows a binary editor actually needs.</h2>
+                </div>
+
+                <div class="feature-grid">
+                    <section>
+                        <h3>Editing</h3>
+                        <ul>
+                            <li>Hex-side and text-side editing</li>
+                            <li>Insert and overwrite modes</li>
+                            <li>Structural insert, delete, cut, and paste</li>
+                            <li>Undo and redo through the document core</li>
+                        </ul>
+                    </section>
+                    <section>
+                        <h3>Inspection</h3>
+                        <ul>
+                            <li>Typed inspector for integers, floating point, time, and IPv4</li>
+                            <li>Inline inspector editing for writable values</li>
+                            <li>Grouped analysis dock with checksums and digests</li>
+                            <li>Bookmarks with labels and colors</li>
+                        </ul>
+                    </section>
+                    <section>
+                        <h3>Search and Replace</h3>
+                        <ul>
+                            <li>Text, raw hex-byte, and typed-value search</li>
+                            <li>Remembered search and replace history</li>
+                            <li>Progress feedback for search and replace workflows</li>
+                            <li>Tabbed result sets with direct navigation</li>
+                        </ul>
+                    </section>
+                </div>
+            </section>
+
+            <section class="engineering-section" id="engineering">
+                <div class="engineering-heading">
+                    <p class="eyebrow">Large File Handling</p>
+                    <h2>Designed to avoid the usual load-everything approach.</h2>
+                </div>
+                <div class="engineering-copy">
+                    <p>
+                        The viewport does not need the whole file in UI memory.
+                        It reads the visible region plus a bounded cache window, which keeps startup fast
+                        and memory use controlled.
+                    </p>
+                    <p>
+                        Search, replace, backup, and save work in chunks instead of giant transient buffers.
+                        That keeps long-running operations more predictable and makes progress reporting possible.
+                    </p>
+                    <p>
+                        The goal is practical desktop behavior on ordinary machines:
+                        fast navigation, bounded memory growth, and clearer feedback on large binary files.
+                    </p>
+                </div>
+            </section>
+
+            <section class="footer-band">
+                <div>
+                    <p class="eyebrow">Release Model</p>
+                    <h3>Simple Windows delivery</h3>
+                    <p>
+                        Tagged releases publish a versioned Windows archive.
+                        Extract the package and run <code>HexMaster.exe</code>.
+                    </p>
+                </div>
+                <div>
+                    <p class="eyebrow">Author</p>
+                    <h3>Majid Siddiqui</h3>
+                    <p><a href="mailto:me@majidarif.com">me@majidarif.com</a><br>2026</p>
+                </div>
+            </section>
+        </main>
+    </div>
 
     <script>
         (function () {
