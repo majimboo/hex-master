@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.1.0] - 2026-04-02
+
+### Added
+
+- Schema Editor tool window for creating, opening, saving, validating, and running `.hms` schema files
+- Custom binary structure DSL with named structs, root blocks, arrays, offset-based fields, and expression-based counts and offsets
+- Schema-specific recent files and in-app syntax guide access
+- Coverage reporting after schema runs, including percent of the remaining file covered from the chosen base offset
+- Public schema documentation in the project docs and GitHub Pages site
+
+### Changed
+
+- Structure results are now populated lazily with chunked large-array expansion, avoiding long freezes after schema runs on large files
+- Schema runs now show progress and support cancel during evaluation
+- Documentation and README updated to describe schema support and expression-based dependent arrays
+
 ## [1.0.1] - 2026-04-02
 
 ### Added
@@ -52,5 +68,6 @@
 - GitHub CI, release automation, and Pages deployment added
 - README, build docs, release docs, and license added for public release readiness
 
+[1.1.0]: https://github.com/majimboo/hex-master/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/majimboo/hex-master/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/majimboo/hex-master/releases/tag/v1.0.0
