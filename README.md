@@ -27,7 +27,7 @@ It is designed as a modern desktop alternative to Hex Workshop for inspecting an
 - insert-bytes workflow with append-at-EOF support and context-menu insertion
 - compare tool with side-by-side binary views, diff navigation, and results
 - schema editor with a custom binary structure DSL, validation, coverage reporting, JSON export, repeat blocks, and structured field inspection
-- 3D Buffer Explorer tool for reverse-engineering raw vertex and index buffers with heuristic scanning and preview
+- 3D Buffer Explorer for 3D model reverse engineering, raw vertex/index buffer analysis, heuristic scanning, and preview
 
 ## Large File Handling
 

@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.2.0] - 2026-04-02
+
+### Added
+
+- 3D Buffer Explorer tool window for 3D model reverse engineering, candidate scanning, and live geometry preview
+- Extended schema DSL with staged `repeat alias in source { ... }` blocks and dotted references inside repeat scopes
+- Schema JSON export from the Schema Editor
+- `Insert Bytes...` workflow, including append-at-end support and context-menu insertion after a clicked byte
+- Example `item_obj.hms` schema for staged mesh-style file layouts
+
+### Changed
+
+- Structural save behavior now uses faster in-place paths when safe and streams general structural saves instead of materializing the whole rewritten file in memory first
+- The 3D explorer now supports both `XYZ together` and `X block, Y block, Z block` layouts for raw geometry exploration
+- Public docs, schema guide, README, and Pages site were updated to reflect the current schema, save, and reverse-engineering toolset
+
 ## [1.1.0] - 2026-04-02
 
 ### Added
@@ -68,6 +84,7 @@
 - GitHub CI, release automation, and Pages deployment added
 - README, build docs, release docs, and license added for public release readiness
 
+[1.2.0]: https://github.com/majimboo/hex-master/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/majimboo/hex-master/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/majimboo/hex-master/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/majimboo/hex-master/releases/tag/v1.0.0
