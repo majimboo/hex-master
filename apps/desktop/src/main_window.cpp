@@ -8,6 +8,7 @@
 #include <QActionGroup>
 #include <QClipboard>
 #include <QCloseEvent>
+#include <QCoreApplication>
 #include <QDockWidget>
 #include <QFileDialog>
 #include <QFile>
@@ -132,6 +133,11 @@ struct SchemaRunResult {
     quint64 base_offset = 0;
     StructureSchema::ParsedNode root_node;
 };
+
+#ifdef Q_OS_WIN
+constexpr auto kExplorerContextMenuKey = "HKEY_CURRENT_USER\\Software\\Classes\\*\\shell\\HexMaster";
+constexpr auto kExplorerContextMenuCommandKey = "HKEY_CURRENT_USER\\Software\\Classes\\*\\shell\\HexMaster\\command";
+#endif
 
 class SchemaLineNumberArea final : public QWidget {
 public:
@@ -2880,7 +2886,8 @@ private:
 
 }
 
-MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
+MainWindow::MainWindow(const QString& startup_path, QWidget* parent)
+    : QMainWindow(parent), startup_path_(startup_path) {
     setWindowTitle("Hex Master");
     setup_central_widget();
     setup_docks();
@@ -2888,6 +2895,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setup_toolbar();
     setup_status_bar();
     restore_session();
+    refresh_explorer_context_menu_actions();
 }
 
 void MainWindow::setup_menu() {
@@ -3004,6 +3012,11 @@ void MainWindow::setup_menu() {
     connect(compare_tool_action_, &QAction::triggered, this, &MainWindow::open_compare_tool);
     model_explorer_tool_action_ = tools_menu->addAction("&3D Buffer Explorer...");
     connect(model_explorer_tool_action_, &QAction::triggered, this, &MainWindow::open_model_explorer_tool);
+    auto* explorer_menu = tools_menu->addMenu(QStringLiteral("E&xplorer Context Menu"));
+    install_explorer_context_menu_action_ = explorer_menu->addAction(QStringLiteral("&Install \"Edit with Hex Master\""));
+    remove_explorer_context_menu_action_ = explorer_menu->addAction(QStringLiteral("&Remove \"Edit with Hex Master\""));
+    connect(install_explorer_context_menu_action_, &QAction::triggered, this, &MainWindow::install_explorer_context_menu);
+    connect(remove_explorer_context_menu_action_, &QAction::triggered, this, &MainWindow::remove_explorer_context_menu);
     compute_hashes_action_ = tools_menu->addAction("Co&mpute Hashes");
     connect(compute_hashes_action_, &QAction::triggered, this, &MainWindow::compute_hashes);
     settings_action_ = tools_menu->addAction("&Settings...");
@@ -3120,7 +3133,9 @@ void MainWindow::restore_session() {
 
     const bool restore_last_session = settings.value(QStringLiteral("settings/restoreLastSession"), true).toBool();
     const QString last_file = settings.value(QStringLiteral("session/lastFile")).toString();
-    if (restore_last_session && !last_file.isEmpty() && QFileInfo::exists(last_file)) {
+    if (!startup_path_.isEmpty() && QFileInfo::exists(startup_path_)) {
+        open_file_path(startup_path_);
+    } else if (restore_last_session && !last_file.isEmpty() && QFileInfo::exists(last_file)) {
         open_file_path(last_file);
     }
 }
@@ -4283,6 +4298,39 @@ void MainWindow::open_settings() {
     statusBar()->showMessage(QStringLiteral("Settings updated."), 2500);
 }
 
+void MainWindow::install_explorer_context_menu() {
+#ifdef Q_OS_WIN
+    const QString exe_path = QDir::toNativeSeparators(QCoreApplication::applicationFilePath());
+
+    QSettings shell_settings(kExplorerContextMenuKey, QSettings::NativeFormat);
+    shell_settings.setValue(QStringLiteral("."), QStringLiteral("Edit with Hex Master"));
+    shell_settings.setValue(QStringLiteral("Icon"), exe_path);
+    shell_settings.setValue(QStringLiteral("MultiSelectModel"), QStringLiteral("Single"));
+    shell_settings.sync();
+
+    QSettings command_settings(kExplorerContextMenuCommandKey, QSettings::NativeFormat);
+    command_settings.setValue(QStringLiteral("."), QStringLiteral("\"%1\" \"%2\"").arg(exe_path, QStringLiteral("%1")));
+    command_settings.sync();
+
+    refresh_explorer_context_menu_actions();
+    statusBar()->showMessage(QStringLiteral("Explorer context menu installed."), 3000);
+#else
+    QMessageBox::information(this, QStringLiteral("Explorer Context Menu"), QStringLiteral("This option is only available on Windows."));
+#endif
+}
+
+void MainWindow::remove_explorer_context_menu() {
+#ifdef Q_OS_WIN
+    QSettings shell_settings(kExplorerContextMenuKey, QSettings::NativeFormat);
+    shell_settings.remove(QString());
+    shell_settings.sync();
+    refresh_explorer_context_menu_actions();
+    statusBar()->showMessage(QStringLiteral("Explorer context menu removed."), 3000);
+#else
+    QMessageBox::information(this, QStringLiteral("Explorer Context Menu"), QStringLiteral("This option is only available on Windows."));
+#endif
+}
+
 void MainWindow::show_about() {
     QMessageBox::about(
         this,
@@ -5194,6 +5242,26 @@ void MainWindow::update_save_action_state(bool dirty) {
     save_action_->setStatusTip(dirty
             ? QStringLiteral("Save the current document. Unsaved changes are present.")
             : QStringLiteral("Save the current document."));
+}
+
+void MainWindow::refresh_explorer_context_menu_actions() {
+#ifdef Q_OS_WIN
+    const QSettings settings(kExplorerContextMenuKey, QSettings::NativeFormat);
+    const bool installed = settings.contains(QStringLiteral("."));
+    if (install_explorer_context_menu_action_ != nullptr) {
+        install_explorer_context_menu_action_->setEnabled(!installed);
+    }
+    if (remove_explorer_context_menu_action_ != nullptr) {
+        remove_explorer_context_menu_action_->setEnabled(installed);
+    }
+#else
+    if (install_explorer_context_menu_action_ != nullptr) {
+        install_explorer_context_menu_action_->setEnabled(false);
+    }
+    if (remove_explorer_context_menu_action_ != nullptr) {
+        remove_explorer_context_menu_action_->setEnabled(false);
+    }
+#endif
 }
 
 void MainWindow::update_inspector_view(const QString& text) {

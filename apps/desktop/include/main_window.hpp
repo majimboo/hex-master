@@ -25,7 +25,7 @@ class MainWindow final : public QMainWindow {
     Q_OBJECT
 
 public:
-    explicit MainWindow(QWidget* parent = nullptr);
+    explicit MainWindow(const QString& startup_path = QString(), QWidget* parent = nullptr);
 
 private:
     enum class SearchInputMode {
@@ -123,6 +123,8 @@ private:
     void open_compare_tool();
     void open_model_explorer_tool();
     void open_settings();
+    void install_explorer_context_menu();
+    void remove_explorer_context_menu();
     void show_about();
     void set_insert_mode();
     void set_overwrite_mode();
@@ -148,6 +150,7 @@ private:
     void update_status(qulonglong caret_offset, qulonglong selection_size, qulonglong document_size);
     void update_window_title(const QString& title, qulonglong document_size);
     void update_save_action_state(bool dirty);
+    void refresh_explorer_context_menu_actions();
     void run_search(bool forward, bool from_caret, bool selection_only = false);
     void run_find_all(bool selection_only);
     void update_inspector_view(const QString& text);
@@ -219,6 +222,8 @@ private:
     QAction* compare_tool_action_ = nullptr;
     QAction* model_explorer_tool_action_ = nullptr;
     QAction* settings_action_ = nullptr;
+    QAction* install_explorer_context_menu_action_ = nullptr;
+    QAction* remove_explorer_context_menu_action_ = nullptr;
     QAction* insert_mode_action_ = nullptr;
     QAction* overwrite_mode_action_ = nullptr;
     QAction* goto_action_ = nullptr;
@@ -258,6 +263,7 @@ private:
     SearchByteOrder last_replace_numeric_byte_order_ = SearchByteOrder::Little;
     SearchExecution last_replace_execution_ = SearchExecution::FindNext;
     bool last_replace_selection_only_ = false;
+    QString startup_path_;
     QStringList recent_files_;
     QStringList goto_offset_history_;
     QStringList search_history_;

@@ -58,7 +58,17 @@ int main(int argc, char* argv[]) {
         "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }"
     );
 
-    MainWindow window;
+    QString startup_path;
+    const QStringList arguments = app.arguments();
+    for (int i = 1; i < arguments.size(); ++i) {
+        const QString candidate = arguments.at(i);
+        if (!candidate.startsWith('-')) {
+            startup_path = candidate;
+            break;
+        }
+    }
+
+    MainWindow window(startup_path);
     window.setWindowIcon(QIcon(QStringLiteral(":/appicon.png")));
     window.resize(1440, 900);
     window.show();

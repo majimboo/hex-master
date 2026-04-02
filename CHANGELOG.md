@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.2.1] - 2026-04-03
+
+### Added
+
+- Windows Explorer context-menu integration with install and remove actions from the Tools menu
+
+### Changed
+
+- Explorer `Edit with Hex Master` launches now open the selected file immediately instead of falling through to session restore
+
 ## [1.2.0] - 2026-04-02
 
 ### Added
@@ -84,6 +94,7 @@
 - GitHub CI, release automation, and Pages deployment added
 - README, build docs, release docs, and license added for public release readiness
 
+[1.2.1]: https://github.com/majimboo/hex-master/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/majimboo/hex-master/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/majimboo/hex-master/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/majimboo/hex-master/compare/v1.0.0...v1.0.1
